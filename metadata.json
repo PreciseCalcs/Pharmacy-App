@@ -1,0 +1,6 @@
+{
+  "name": "PharmaBase Offline-First Pharmacy System",
+  "description": "Production pharmacy management, inventory stock tracking, and POS dispensing architecture powered by local PocketBase static export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

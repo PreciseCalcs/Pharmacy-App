@@ -1,0 +1,265 @@
+[
+  {
+    "id": "col_medicines_pharmacy",
+    "name": "medicines",
+    "type": "base",
+    "system": false,
+    "schema": [
+      {
+        "name": "name",
+        "type": "text",
+        "required": true,
+        "options": { "min": 2, "max": 200 }
+      },
+      {
+        "name": "generic_name",
+        "type": "text",
+        "required": true,
+        "options": { "min": 2, "max": 200 }
+      },
+      {
+        "name": "sku",
+        "type": "text",
+        "required": true,
+        "options": { "min": 2, "max": 50 }
+      },
+      {
+        "name": "barcode",
+        "type": "text",
+        "required": false,
+        "options": { "max": 50 }
+      },
+      {
+        "name": "category",
+        "type": "select",
+        "required": true,
+        "options": {
+          "maxSelect": 1,
+          "values": [
+            "Antibiotics",
+            "Analgesics & Antipyretics",
+            "Cardiovascular",
+            "Respiratory",
+            "Gastrointestinal",
+            "Endocrine & Diabetes",
+            "Dermatology",
+            "Vitamins & Supplements"
+          ]
+        }
+      },
+      {
+        "name": "dosage_form",
+        "type": "select",
+        "required": true,
+        "options": {
+          "maxSelect": 1,
+          "values": [
+            "Tablet",
+            "Capsule",
+            "Syrup",
+            "Suspension",
+            "Injection",
+            "Ointment",
+            "Drops",
+            "Inhaler"
+          ]
+        }
+      },
+      {
+        "name": "strength",
+        "type": "text",
+        "required": true,
+        "options": { "max": 50 }
+      },
+      {
+        "name": "unit_price",
+        "type": "number",
+        "required": true,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "cost_price",
+        "type": "number",
+        "required": true,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "stock_quantity",
+        "type": "number",
+        "required": true,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "min_threshold",
+        "type": "number",
+        "required": true,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "expiry_date",
+        "type": "date",
+        "required": true
+      },
+      {
+        "name": "batch_number",
+        "type": "text",
+        "required": true,
+        "options": { "max": 60 }
+      },
+      {
+        "name": "location_shelf",
+        "type": "text",
+        "required": false,
+        "options": { "max": 100 }
+      },
+      {
+        "name": "is_prescription_required",
+        "type": "bool",
+        "required": false
+      },
+      {
+        "name": "notes",
+        "type": "text",
+        "required": false
+      }
+    ],
+    "indexes": [
+      "CREATE UNIQUE INDEX `idx_med_sku` ON `medicines` (`sku`)",
+      "CREATE INDEX `idx_med_barcode` ON `medicines` (`barcode`)",
+      "CREATE INDEX `idx_med_name` ON `medicines` (`name`)"
+    ],
+    "listRule": "",
+    "viewRule": "",
+    "createRule": "@request.auth.id != ''",
+    "updateRule": "@request.auth.id != ''",
+    "deleteRule": "@request.auth.id != ''"
+  },
+  {
+    "id": "col_transactions_pharmacy",
+    "name": "transactions",
+    "type": "base",
+    "system": false,
+    "schema": [
+      {
+        "name": "transaction_number",
+        "type": "text",
+        "required": true
+      },
+      {
+        "name": "customer_name",
+        "type": "text",
+        "required": true
+      },
+      {
+        "name": "customer_phone",
+        "type": "text",
+        "required": false
+      },
+      {
+        "name": "pharmacist_name",
+        "type": "text",
+        "required": true
+      },
+      {
+        "name": "payment_method",
+        "type": "select",
+        "required": true,
+        "options": {
+          "maxSelect": 1,
+          "values": ["Cash", "Card", "Insurance", "Mobile Payment"]
+        }
+      },
+      {
+        "name": "items",
+        "type": "json",
+        "required": true
+      },
+      {
+        "name": "subtotal",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "tax",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "discount",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "total_amount",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "notes",
+        "type": "text",
+        "required": false
+      }
+    ],
+    "indexes": [
+      "CREATE UNIQUE INDEX `idx_txn_num` ON `transactions` (`transaction_number`)"
+    ],
+    "listRule": "@request.auth.id != ''",
+    "viewRule": "@request.auth.id != ''",
+    "createRule": "",
+    "updateRule": null,
+    "deleteRule": null
+  },
+  {
+    "id": "col_stock_adjustments",
+    "name": "stock_adjustments",
+    "type": "base",
+    "system": false,
+    "schema": [
+      {
+        "name": "medicine_id",
+        "type": "text",
+        "required": true
+      },
+      {
+        "name": "medicine_name",
+        "type": "text",
+        "required": true
+      },
+      {
+        "name": "batch_number",
+        "type": "text",
+        "required": true
+      },
+      {
+        "name": "previous_stock",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "new_stock",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "change_amount",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "type": "text",
+        "required": true
+      },
+      {
+        "name": "pharmacist_name",
+        "type": "text",
+        "required": true
+      }
+    ],
+    "listRule": "@request.auth.id != ''",
+    "viewRule": "@request.auth.id != ''",
+    "createRule": "",
+    "updateRule": null,
+    "deleteRule": null
+  }
+]
