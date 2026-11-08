@@ -1,14 +1,18 @@
-import { PrintFormat, SaleTransaction, ZAHID_PHARMACY_DETAILS } from '../types/pharmacy';
+import { PharmacyDetails, PrintFormat, SaleTransaction, ZAHID_PHARMACY_DETAILS } from '../types/pharmacy';
 import { formatDateTime } from './dates';
+import { syncEngine } from '../services/syncEngine';
 
 export function generateReceiptHtml(
   txn: SaleTransaction,
-  format: PrintFormat = 'thermal-80'
+  format: PrintFormat = 'thermal-80',
+  customDetails?: PharmacyDetails
 ): string {
   const isThermal58 = format === 'thermal-58';
   const isA4 = format === 'a4';
 
-  const containerWidth = isThermal58 ? '54mm' : isThermal58 ? '72mm' : isA4 ? '190mm' : '72mm';
+  const details = customDetails || syncEngine.getPharmacyDetails() || ZAHID_PHARMACY_DETAILS;
+
+  const containerWidth = isThermal58 ? '54mm' : isA4 ? '190mm' : '72mm';
   const fontSize = isThermal58 ? '10px' : isA4 ? '13px' : '11px';
 
   const itemsHtml = txn.items
@@ -35,20 +39,25 @@ export function generateReceiptHtml(
     <div style="width: ${containerWidth}; margin: 0 auto; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: ${fontSize}; line-height: 1.35; color: #111827;">
       <!-- Store Header -->
       <div style="text-align: center; border-bottom: 2px dashed #9ca3af; padding-bottom: 8px; margin-bottom: 8px;">
+        ${
+          details.logoUrl
+            ? `<div style="text-align: center; margin-bottom: 4px;"><img src="${details.logoUrl}" style="max-height: 40px; margin: 0 auto; display: block;" /></div>`
+            : ''
+        }
         <h1 style="margin: 0; font-size: 140%; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;">
-          ${ZAHID_PHARMACY_DETAILS.name}
+          ${details.name}
         </h1>
         <div style="font-size: 85%; color: #4b5563; margin-top: 2px;">
-          ${ZAHID_PHARMACY_DETAILS.address}
+          ${details.address}
         </div>
         <div style="font-size: 85%; color: #4b5563;">
-          ${ZAHID_PHARMACY_DETAILS.city}
+          ${details.city}
         </div>
         <div style="font-size: 80%; font-weight: 600; color: #1f2937; margin-top: 4px; background: #f3f4f6; display: inline-block; padding: 2px 6px; border-radius: 4px;">
-          Licence: ${ZAHID_PHARMACY_DETAILS.drugLicenceNumber}
+          Licence: ${details.drugLicenceNumber} ${details.ntnNumber ? `&bull; NTN: ${details.ntnNumber}` : ''}
         </div>
         <div style="font-size: 85%; font-weight: 600; margin-top: 2px;">
-          Phone: ${ZAHID_PHARMACY_DETAILS.phone}
+          Phone: ${details.phone}
         </div>
       </div>
 
@@ -63,7 +72,7 @@ export function generateReceiptHtml(
           <span>${txn.customerPhone || ''}</span>
         </div>
         <div style="display: flex; justify-content: space-between;">
-          <span><strong>Staff / Counter:</strong> ${txn.staffName}</span>
+          <span><strong>Counter:</strong> ${txn.counterName || 'Main Counter'}</span>
           <span style="font-weight: 600; text-transform: uppercase;">${txn.paymentMethod}</span>
         </div>
       </div>
@@ -110,13 +119,13 @@ export function generateReceiptHtml(
       <!-- Footer Policy -->
       <div style="text-align: center; border-top: 1px dashed #9ca3af; padding-top: 8px; font-size: 78%; color: #4b5563;">
         <p style="margin: 0 0 4px 0; font-weight: bold;">
-          ${ZAHID_PHARMACY_DETAILS.tagline}
+          ${details.tagline}
         </p>
         <p style="margin: 0 0 6px 0;">
-          ${ZAHID_PHARMACY_DETAILS.thankYouMessage}
+          ${details.thankYouMessage}
         </p>
         <div style="font-size: 70%; color: #9ca3af; text-transform: uppercase;">
-          PocketBase Single-Binary POS Engine &bull; Ghazipur Jalalpur Pirwala
+          PocketBase Single-Binary POS Engine &bull; Computerized Record
         </div>
       </div>
     </div>

@@ -15,7 +15,8 @@ import {
   Percent,
   Sparkles,
   Layers,
-  ArrowRight
+  ArrowRight,
+  Users
 } from 'lucide-react';
 import { 
   DosageForm, 
@@ -27,6 +28,7 @@ import {
 } from '../types/pharmacy';
 import { formatPKR, getPieceRetailPrice, getPieceUnitName, getTotalPiecesInStock } from '../utils/pharmacyHelpers';
 import { soundService } from '../services/soundAlerts';
+import { syncEngine } from '../services/syncEngine';
 
 interface PosViewProps {
   medicines: MedicineItem[];
@@ -35,6 +37,8 @@ interface PosViewProps {
     items: SaleItem[];
     customerName: string;
     customerPhone?: string;
+    customerId?: string;
+    counterName?: string;
     staffName: string;
     staffRole: any;
     paymentMethod: PaymentMethod;
@@ -57,6 +61,7 @@ export const PosView: React.FC<PosViewProps> = ({
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [customerName, setCustomerName] = useState('Walk-in Customer');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
   const [discountPercent, setDiscountPercent] = useState<number>(0);
   const [receivedAmount, setReceivedAmount] = useState<string>('');
@@ -64,6 +69,8 @@ export const PosView: React.FC<PosViewProps> = ({
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
   const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const activeCounter = syncEngine.getActiveCounter();
+  const khataCustomers = syncEngine.getKhataCustomers();
 
   // Available medicines for fast catalog select
   const availableMedicines = medicines.filter((m) => {
@@ -157,6 +164,13 @@ export const PosView: React.FC<PosViewProps> = ({
     setCart([]);
   };
 
+  const handleSelectKhataCustomer = (cust: typeof khataCustomers[0]) => {
+    setSelectedCustomerId(cust.id);
+    setCustomerName(cust.name);
+    setCustomerPhone(cust.phone);
+    soundService.click();
+  };
+
   // Financial calculations
   const subtotal = Number(cart.reduce((sum, item) => sum + item.subtotal, 0).toFixed(2));
   const discountAmount = Math.round((subtotal * discountPercent) / 100);
@@ -175,6 +189,8 @@ export const PosView: React.FC<PosViewProps> = ({
         items: cart,
         customerName: customerName.trim() || 'Walk-in Customer',
         customerPhone: customerPhone.trim() || undefined,
+        customerId: selectedCustomerId || undefined,
+        counterName: activeCounter,
         staffName: currentUser.name,
         staffRole: currentUser.role,
         paymentMethod,
@@ -198,9 +214,13 @@ export const PosView: React.FC<PosViewProps> = ({
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       {/* Left Column: Medicine Catalog & Fast Scan (7 Cols) */}
       <div className="lg:col-span-7 space-y-4">
-        <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5">
+        <div className="bg-white rounded-2xl shadow-2xs border border-slate-200 p-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span className="text-xs font-semibold text-emerald-800">{activeCounter}</span>
+              </div>
               <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
                 <ShoppingCart className="w-5 h-5 text-emerald-700" />
                 <span>POS Dispense Register Counter</span>
@@ -305,7 +325,7 @@ export const PosView: React.FC<PosViewProps> = ({
 
       {/* Right Column: Checkout Cart & Billing Register (5 Cols) */}
       <div className="lg:col-span-5 space-y-4">
-        <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-5">
+        <div className="bg-white rounded-2xl shadow-2xs border border-slate-200 p-5">
           <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-3">
             <h3 className="font-bold text-slate-900 text-sm sm:text-base flex items-center gap-2">
               <Receipt className="w-4 h-4 text-emerald-700" />
@@ -340,7 +360,6 @@ export const PosView: React.FC<PosViewProps> = ({
           ) : (
             <div className="space-y-2.5 max-h-[260px] overflow-y-auto pr-1">
               {cart.map((item, index) => {
-                const med = medicines.find((m) => m.id === item.medicineId);
                 const unitLabel = item.unitType === 'pack' ? 'Pack' : 'Loose';
 
                 return (
@@ -409,7 +428,10 @@ export const PosView: React.FC<PosViewProps> = ({
                 <input
                   type="text"
                   value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
+                  onChange={(e) => {
+                    setCustomerName(e.target.value);
+                    setSelectedCustomerId('');
+                  }}
                   placeholder="Walk-in Customer"
                   className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
@@ -435,7 +457,7 @@ export const PosView: React.FC<PosViewProps> = ({
                   { id: 'Card', icon: CreditCard },
                   { id: 'EasyPaisa', icon: Smartphone },
                   { id: 'JazzCash', icon: Smartphone },
-                  { id: 'Credit', icon: Receipt },
+                  { id: 'Credit', icon: Users },
                 ].map(({ id, icon: Icon }) => (
                   <button
                     key={id}
@@ -453,6 +475,32 @@ export const PosView: React.FC<PosViewProps> = ({
                 ))}
               </div>
             </div>
+
+            {/* If Credit is selected, show Khata Customer Quick Select */}
+            {paymentMethod === 'Credit' && (
+              <div className="p-2.5 rounded-xl bg-amber-50/70 border border-amber-200 text-xs space-y-1.5">
+                <span className="font-semibold text-amber-900 flex items-center gap-1 text-[11px]">
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Link to Credit Khata Customer Account:</span>
+                </span>
+                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                  {khataCustomers.map((cust) => (
+                    <button
+                      key={cust.id}
+                      type="button"
+                      onClick={() => handleSelectKhataCustomer(cust)}
+                      className={`px-2 py-1 rounded-md text-[11px] font-medium border transition ${
+                        selectedCustomerId === cust.id
+                          ? 'bg-amber-600 text-white border-amber-600'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-amber-100'
+                      }`}
+                    >
+                      {cust.name} (Due: Rs {cust.balanceDue})
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Discount Quick Select */}
             <div>
@@ -498,32 +546,34 @@ export const PosView: React.FC<PosViewProps> = ({
               </div>
 
               {/* Cash Tendered & Change */}
-              <div className="pt-2 border-t border-slate-200 flex items-center justify-between gap-3">
-                <div className="flex-1">
-                  <span className="text-[10px] text-slate-500 block mb-0.5">Cash Received (Rs.)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    placeholder={String(netTotal)}
-                    value={receivedAmount}
-                    onChange={(e) => setReceivedAmount(e.target.value)}
-                    className="w-full px-2 py-1 rounded border border-slate-300 font-mono text-xs bg-white"
-                  />
+              {paymentMethod !== 'Credit' && (
+                <div className="pt-2 border-t border-slate-200 flex items-center justify-between gap-3">
+                  <div className="flex-1">
+                    <span className="text-[10px] text-slate-500 block mb-0.5">Cash Received (Rs.)</span>
+                    <input
+                      type="number"
+                      min={0}
+                      placeholder={String(netTotal)}
+                      value={receivedAmount}
+                      onChange={(e) => setReceivedAmount(e.target.value)}
+                      className="w-full px-2 py-1 rounded border border-slate-300 font-mono text-xs bg-white"
+                    />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-500 block mb-0.5">Change Due</span>
+                    <span className="font-mono font-bold text-sm text-slate-900">
+                      Rs. {changeAmount}
+                    </span>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-slate-500 block mb-0.5">Change Due</span>
-                  <span className="font-mono font-bold text-sm text-slate-900">
-                    Rs. {changeAmount}
-                  </span>
-                </div>
-              </div>
+              )}
             </div>
 
             {/* Complete Sale Button */}
             <button
               type="submit"
               disabled={cart.length === 0 || isProcessing}
-              className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md shadow-emerald-600/30 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full py-3 rounded-xl bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-sm shadow-md shadow-emerald-950/20 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isProcessing ? (
                 <>

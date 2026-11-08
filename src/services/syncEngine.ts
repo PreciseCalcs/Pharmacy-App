@@ -4,7 +4,14 @@ import {
   SaleTransaction, 
   SaleItem, 
   ConnectionStatus,
-  StockAlert
+  StockAlert,
+  PharmacyDetails,
+  DEFAULT_PHARMACY_DETAILS,
+  PharmacyCounter,
+  DEFAULT_COUNTERS,
+  CustomerKhata,
+  KhataEntry,
+  INITIAL_KHATA_CUSTOMERS
 } from '../types/pharmacy';
 import { INITIAL_ZAHID_MEDICINES } from '../data/initialMedicines';
 import { getDaysUntilExpiry, getTotalPiecesInStock, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
@@ -12,11 +19,19 @@ import { getDaysUntilExpiry, getTotalPiecesInStock, isExpired, isExpiringSoon } 
 const INVENTORY_STORAGE_KEY = 'zahid_med_inventory_v2';
 const SALES_STORAGE_KEY = 'zahid_med_sales_v2';
 const OUTBOX_STORAGE_KEY = 'zahid_med_outbox_v1';
+const SETTINGS_STORAGE_KEY = 'zahid_pharmacy_settings_v1';
+const COUNTERS_STORAGE_KEY = 'zahid_counters_v1';
+const ACTIVE_COUNTER_KEY = 'zahid_active_counter_v1';
+const KHATA_STORAGE_KEY = 'zahid_khata_customers_v1';
 
 export class PharmacySyncEngine {
   private medicines: MedicineItem[] = [];
   private sales: SaleTransaction[] = [];
   private outbox: Array<{ id: string; action: string; payload: unknown; createdAt: string }> = [];
+  private pharmacyDetails: PharmacyDetails = { ...DEFAULT_PHARMACY_DETAILS };
+  private counters: PharmacyCounter[] = [...DEFAULT_COUNTERS];
+  private activeCounter: string = 'Main Counter';
+  private khataCustomers: CustomerKhata[] = [...INITIAL_KHATA_CUSTOMERS];
   private subscribers: Array<() => void> = [];
 
   constructor() {
@@ -51,11 +66,49 @@ export class PharmacySyncEngine {
       } else {
         this.outbox = [];
       }
+
+      // 4. Load Settings
+      const savedSettings = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (savedSettings) {
+        this.pharmacyDetails = { ...DEFAULT_PHARMACY_DETAILS, ...JSON.parse(savedSettings) };
+      } else {
+        this.pharmacyDetails = { ...DEFAULT_PHARMACY_DETAILS };
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.pharmacyDetails));
+      }
+
+      // 5. Load Counters
+      const savedCounters = localStorage.getItem(COUNTERS_STORAGE_KEY);
+      if (savedCounters) {
+        this.counters = JSON.parse(savedCounters);
+      } else {
+        this.counters = [...DEFAULT_COUNTERS];
+        localStorage.setItem(COUNTERS_STORAGE_KEY, JSON.stringify(this.counters));
+      }
+
+      const savedActiveCounter = localStorage.getItem(ACTIVE_COUNTER_KEY);
+      if (savedActiveCounter) {
+        this.activeCounter = savedActiveCounter;
+      } else {
+        this.activeCounter = this.counters[0]?.name || 'Main Counter';
+      }
+
+      // 6. Load Khata Customers
+      const savedKhata = localStorage.getItem(KHATA_STORAGE_KEY);
+      if (savedKhata) {
+        this.khataCustomers = JSON.parse(savedKhata);
+      } else {
+        this.khataCustomers = [...INITIAL_KHATA_CUSTOMERS];
+        localStorage.setItem(KHATA_STORAGE_KEY, JSON.stringify(this.khataCustomers));
+      }
     } catch (e) {
       console.warn('Failed to initialize local pharmacy store, falling back to defaults', e);
       this.medicines = [...INITIAL_ZAHID_MEDICINES];
       this.sales = [];
       this.outbox = [];
+      this.pharmacyDetails = { ...DEFAULT_PHARMACY_DETAILS };
+      this.counters = [...DEFAULT_COUNTERS];
+      this.activeCounter = 'Main Counter';
+      this.khataCustomers = [...INITIAL_KHATA_CUSTOMERS];
     }
   }
 
@@ -76,6 +129,225 @@ export class PharmacySyncEngine {
     });
   }
 
+  // --- Pharmacy Settings ---
+  public getPharmacyDetails(): PharmacyDetails {
+    return { ...this.pharmacyDetails };
+  }
+
+  public async updatePharmacyDetails(updates: Partial<PharmacyDetails>): Promise<PharmacyDetails> {
+    this.pharmacyDetails = {
+      ...this.pharmacyDetails,
+      ...updates,
+    };
+    try {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.pharmacyDetails));
+    } catch (e) {
+      console.error('Failed to save settings to localStorage', e);
+    }
+    this.enqueueOutbox('UPDATE_SETTINGS', this.pharmacyDetails);
+    this.notify();
+
+    try {
+      await pb.collection('pharmacy_settings').create(this.pharmacyDetails);
+    } catch {}
+
+    return this.pharmacyDetails;
+  }
+
+  // --- Counters ---
+  public getCounters(): PharmacyCounter[] {
+    return [...this.counters];
+  }
+
+  public getActiveCounter(): string {
+    return this.activeCounter;
+  }
+
+  public setActiveCounter(name: string): void {
+    this.activeCounter = name;
+    try {
+      localStorage.setItem(ACTIVE_COUNTER_KEY, name);
+    } catch {}
+    this.notify();
+  }
+
+  public addCounter(counter: Omit<PharmacyCounter, 'id'>): PharmacyCounter {
+    const newCounter: PharmacyCounter = {
+      ...counter,
+      id: `cnt_${Date.now()}`,
+    };
+    this.counters.push(newCounter);
+    try {
+      localStorage.setItem(COUNTERS_STORAGE_KEY, JSON.stringify(this.counters));
+    } catch {}
+    this.notify();
+    return newCounter;
+  }
+
+  public deleteCounter(id: string): boolean {
+    if (this.counters.length <= 1) return false;
+    this.counters = this.counters.filter((c) => c.id !== id);
+    if (!this.counters.some((c) => c.name === this.activeCounter)) {
+      this.activeCounter = this.counters[0].name;
+      try {
+        localStorage.setItem(ACTIVE_COUNTER_KEY, this.activeCounter);
+      } catch {}
+    }
+    try {
+      localStorage.setItem(COUNTERS_STORAGE_KEY, JSON.stringify(this.counters));
+    } catch {}
+    this.notify();
+    return true;
+  }
+
+  // --- Credit Khata Management ---
+  public getKhataCustomers(): CustomerKhata[] {
+    return [...this.khataCustomers];
+  }
+
+  public getKhataCustomer(id: string): CustomerKhata | undefined {
+    return this.khataCustomers.find((c) => c.id === id);
+  }
+
+  public getTotalOutstandingKhata(): number {
+    return this.khataCustomers.reduce((sum, c) => sum + (c.balanceDue > 0 ? c.balanceDue : 0), 0);
+  }
+
+  public getKhataAccountsWithBalanceCount(): number {
+    return this.khataCustomers.filter((c) => c.balanceDue > 0).length;
+  }
+
+  public async addKhataCustomer(data: { name: string; phone: string; address?: string; initialBalance?: number }): Promise<CustomerKhata> {
+    const id = `kht_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const initBal = Number(data.initialBalance || 0);
+
+    const history: KhataEntry[] = [];
+    if (initBal > 0) {
+      history.push({
+        id: `ent_init_${Date.now()}`,
+        type: 'sale',
+        description: 'Opening balance due',
+        amount: initBal,
+        date: new Date().toISOString(),
+      });
+    }
+
+    const newCustomer: CustomerKhata = {
+      id,
+      name: data.name.trim(),
+      phone: data.phone.trim(),
+      address: data.address?.trim() || '',
+      balanceDue: initBal,
+      history,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.khataCustomers.unshift(newCustomer);
+    this.saveKhata();
+    this.enqueueOutbox('ADD_KHATA_CUSTOMER', newCustomer);
+    this.notify();
+
+    try {
+      await pb.collection('customers_khata').create(newCustomer);
+    } catch {}
+
+    return newCustomer;
+  }
+
+  public async recordKhataPayment(
+    customerId: string,
+    amount: number,
+    paymentMethod: string = 'Cash',
+    note?: string
+  ): Promise<CustomerKhata> {
+    const customer = this.khataCustomers.find((c) => c.id === customerId);
+    if (!customer) throw new Error('Customer account not found');
+
+    const paymentAmount = Math.max(0, Number(amount));
+    customer.balanceDue = Math.max(0, customer.balanceDue - paymentAmount);
+    customer.updatedAt = new Date().toISOString();
+
+    const entry: KhataEntry = {
+      id: `ent_pay_${Date.now()}`,
+      type: 'payment',
+      description: `Payment · ${paymentMethod}${note ? ` · ${note}` : ''}`,
+      amount: paymentAmount,
+      paymentMethod,
+      date: new Date().toISOString(),
+      note,
+    };
+
+    customer.history.unshift(entry);
+    this.saveKhata();
+    this.enqueueOutbox('RECORD_KHATA_PAYMENT', { customerId, entry, newBalance: customer.balanceDue });
+    this.notify();
+
+    try {
+      await pb.collection('customers_khata').update(customerId, customer);
+    } catch {}
+
+    return customer;
+  }
+
+  public async recordKhataCreditSale(
+    customerId: string,
+    invoiceNumber: string,
+    amount: number,
+    note?: string
+  ): Promise<CustomerKhata> {
+    const customer = this.khataCustomers.find((c) => c.id === customerId);
+    if (!customer) throw new Error('Customer account not found');
+
+    const saleAmount = Math.max(0, Number(amount));
+    customer.balanceDue += saleAmount;
+    customer.updatedAt = new Date().toISOString();
+
+    const entry: KhataEntry = {
+      id: `ent_sale_${Date.now()}`,
+      type: 'sale',
+      invoiceNumber,
+      description: `Credit sale · ${invoiceNumber}${note ? ` · ${note}` : ''}`,
+      amount: saleAmount,
+      paymentMethod: 'Credit',
+      date: new Date().toISOString(),
+      note,
+    };
+
+    customer.history.unshift(entry);
+    this.saveKhata();
+    this.enqueueOutbox('RECORD_KHATA_SALE', { customerId, entry, newBalance: customer.balanceDue });
+    this.notify();
+
+    try {
+      await pb.collection('customers_khata').update(customerId, customer);
+    } catch {}
+
+    return customer;
+  }
+
+  public async deleteKhataCustomer(customerId: string): Promise<boolean> {
+    this.khataCustomers = this.khataCustomers.filter((c) => c.id !== customerId);
+    this.saveKhata();
+    this.enqueueOutbox('DELETE_KHATA_CUSTOMER', { customerId });
+    this.notify();
+
+    try {
+      await pb.collection('customers_khata').delete(customerId);
+    } catch {}
+
+    return true;
+  }
+
+  private saveKhata(): void {
+    try {
+      localStorage.setItem(KHATA_STORAGE_KEY, JSON.stringify(this.khataCustomers));
+    } catch (e) {
+      console.error('Failed to save khata to localStorage', e);
+    }
+  }
+
+  // --- Inventory & Sales ---
   public getMedicines(): MedicineItem[] {
     return [...this.medicines];
   }
@@ -88,7 +360,6 @@ export class PharmacySyncEngine {
     return this.outbox.length;
   }
 
-  // Stock Alerts computation
   public getAlerts(): StockAlert[] {
     const alerts: StockAlert[] = [];
 
@@ -157,7 +428,6 @@ export class PharmacySyncEngine {
     });
   }
 
-  // Add new medicine
   public async addMedicine(item: Omit<MedicineItem, 'id' | 'created' | 'updated'>): Promise<MedicineItem> {
     const newItem: MedicineItem = {
       ...item,
@@ -171,7 +441,6 @@ export class PharmacySyncEngine {
     this.enqueueOutbox('ADD_MEDICINE', newItem);
     this.notify();
 
-    // Try live PocketBase push
     try {
       await pb.collection('medicines').create(newItem);
     } catch {}
@@ -179,7 +448,6 @@ export class PharmacySyncEngine {
     return newItem;
   }
 
-  // Update existing medicine
   public async updateMedicine(id: string, updates: Partial<MedicineItem>): Promise<MedicineItem> {
     const idx = this.medicines.findIndex((m) => m.id === id);
     if (idx === -1) throw new Error('Medicine not found in catalog');
@@ -195,7 +463,6 @@ export class PharmacySyncEngine {
     this.enqueueOutbox('UPDATE_MEDICINE', { id, updates });
     this.notify();
 
-    // Try live PocketBase push
     try {
       await pb.collection('medicines').update(id, updates);
     } catch {}
@@ -203,7 +470,6 @@ export class PharmacySyncEngine {
     return updated;
   }
 
-  // Delete medicine
   public async deleteMedicine(id: string): Promise<boolean> {
     this.medicines = this.medicines.filter((m) => m.id !== id);
     this.saveMedicines();
@@ -222,6 +488,8 @@ export class PharmacySyncEngine {
     items: SaleItem[];
     customerName: string;
     customerPhone?: string;
+    customerId?: string;
+    counterName?: string;
     staffName: string;
     staffRole: any;
     paymentMethod: any;
@@ -229,7 +497,7 @@ export class PharmacySyncEngine {
     receivedAmount: number;
     notes?: string;
   }): Promise<SaleTransaction> {
-    const { items, customerName, customerPhone, staffName, staffRole, paymentMethod, discountPercent, receivedAmount, notes } = transactionData;
+    const { items, customerName, customerPhone, customerId, counterName, staffName, staffRole, paymentMethod, discountPercent, receivedAmount, notes } = transactionData;
 
     const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
     const discountAmount = Math.round((subtotal * (discountPercent || 0)) / 100);
@@ -238,13 +506,15 @@ export class PharmacySyncEngine {
     const finalReceived = receivedAmount > 0 ? receivedAmount : totalAmount;
     const changeAmount = Math.max(0, finalReceived - totalAmount);
 
-    const invoiceNumber = `ZMS-${new Date().getFullYear()}-${String(this.sales.length + 1).padStart(5, '0')}`;
+    const invoiceNumber = `DEMO-${String(1030 + this.sales.length + 1)}`;
 
     const newTransaction: SaleTransaction = {
       id: `txn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       invoiceNumber,
       customerName: customerName.trim() || 'Walk-in Customer',
       customerPhone: customerPhone?.trim() || undefined,
+      customerId,
+      counterName: counterName || this.activeCounter,
       staffName,
       staffRole,
       paymentMethod,
@@ -261,7 +531,7 @@ export class PharmacySyncEngine {
       createdAt: new Date().toISOString(),
     };
 
-    // 1. Decrement inventory stock accurately (packs vs loose pieces)
+    // 1. Decrement inventory stock
     items.forEach((item) => {
       const med = this.medicines.find((m) => m.id === item.medicineId);
       if (!med) return;
@@ -269,10 +539,8 @@ export class PharmacySyncEngine {
       if (item.unitType === 'pack') {
         med.currentStockPacks = Math.max(0, med.currentStockPacks - item.quantity);
       } else {
-        // Loose unit dispense
         let remainingLoose = (med.currentStockLoose || 0) - item.quantity;
         if (remainingLoose < 0) {
-          // Break packs into loose pieces as needed
           const unitsPerPack = med.unitsPerPack > 0 ? med.unitsPerPack : 1;
           const packsNeeded = Math.ceil(Math.abs(remainingLoose) / unitsPerPack);
           med.currentStockPacks = Math.max(0, med.currentStockPacks - packsNeeded);
@@ -283,17 +551,67 @@ export class PharmacySyncEngine {
       med.updated = new Date().toISOString();
     });
 
-    // 2. Save locally
+    // 2. If Payment Method is 'Credit', link to customer's Khata
+    if (paymentMethod === 'Credit') {
+      let targetCustomer: CustomerKhata | undefined;
+      if (customerId) {
+        targetCustomer = this.khataCustomers.find((c) => c.id === customerId);
+      } else if (customerPhone) {
+        targetCustomer = this.khataCustomers.find((c) => c.phone.replace(/\s+/g, '') === customerPhone.replace(/\s+/g, ''));
+      } else if (customerName && customerName !== 'Walk-in Customer') {
+        targetCustomer = this.khataCustomers.find((c) => c.name.toLowerCase() === customerName.toLowerCase());
+      }
+
+      if (targetCustomer) {
+        targetCustomer.balanceDue += totalAmount;
+        targetCustomer.updatedAt = new Date().toISOString();
+        targetCustomer.history.unshift({
+          id: `ent_sale_${Date.now()}`,
+          type: 'sale',
+          invoiceNumber,
+          description: `Credit sale · ${invoiceNumber}`,
+          amount: totalAmount,
+          paymentMethod: 'Credit',
+          date: new Date().toISOString(),
+          note: notes,
+        });
+        this.saveKhata();
+      } else if (customerName && customerName !== 'Walk-in Customer') {
+        // Automatically create customer khata record
+        const newKhata: CustomerKhata = {
+          id: `kht_${Date.now()}`,
+          name: customerName,
+          phone: customerPhone || '',
+          balanceDue: totalAmount,
+          updatedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          history: [
+            {
+              id: `ent_sale_${Date.now()}`,
+              type: 'sale',
+              invoiceNumber,
+              description: `Credit sale · ${invoiceNumber}`,
+              amount: totalAmount,
+              paymentMethod: 'Credit',
+              date: new Date().toISOString(),
+            },
+          ],
+        };
+        this.khataCustomers.unshift(newKhata);
+        this.saveKhata();
+      }
+    }
+
+    // 3. Save locally
     this.sales.unshift(newTransaction);
     this.saveMedicines();
     this.saveSales();
     this.enqueueOutbox('PROCESS_SALE', newTransaction);
     this.notify();
 
-    // 3. Push to PocketBase live collection if available
+    // 4. Push to PocketBase live collection if available
     try {
       await pb.collection('sales').create(newTransaction);
-      // Update medicines in PocketBase
       for (const item of items) {
         const med = this.medicines.find((m) => m.id === item.medicineId);
         if (med) {
@@ -310,7 +628,6 @@ export class PharmacySyncEngine {
     return newTransaction;
   }
 
-  // Link unrecognized barcode to existing medicine
   public async linkBarcode(medicineId: string, newBarcode: string): Promise<MedicineItem> {
     return this.updateMedicine(medicineId, { barcode: newBarcode.trim() });
   }
@@ -338,6 +655,8 @@ export class PharmacySyncEngine {
         } else if (item.action === 'DELETE_MEDICINE') {
           const { id } = item.payload as any;
           await pb.collection('medicines').delete(id);
+        } else if (item.action === 'UPDATE_SETTINGS') {
+          await pb.collection('pharmacy_settings').create(item.payload as Record<string, any>);
         }
         synced++;
       } catch (err) {
@@ -354,14 +673,23 @@ export class PharmacySyncEngine {
     return { synced, failed };
   }
 
-  // Reset to initial seed catalog
   public resetToDefaults(): void {
     this.medicines = [...INITIAL_ZAHID_MEDICINES];
     this.sales = [];
     this.outbox = [];
+    this.pharmacyDetails = { ...DEFAULT_PHARMACY_DETAILS };
+    this.counters = [...DEFAULT_COUNTERS];
+    this.activeCounter = 'Main Counter';
+    this.khataCustomers = [...INITIAL_KHATA_CUSTOMERS];
     this.saveMedicines();
     this.saveSales();
     this.saveOutbox();
+    this.saveKhata();
+    try {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.pharmacyDetails));
+      localStorage.setItem(COUNTERS_STORAGE_KEY, JSON.stringify(this.counters));
+      localStorage.setItem(ACTIVE_COUNTER_KEY, this.activeCounter);
+    } catch {}
     this.notify();
   }
 

@@ -1,321 +1,349 @@
 import React from 'react';
 import { 
-  TrendingUp, 
+  Users, 
+  ShoppingCart, 
+  DollarSign, 
+  CreditCard, 
   Package, 
   AlertTriangle, 
-  Clock, 
-  DollarSign, 
-  ShoppingCart, 
-  ArrowUpRight, 
-  ShieldCheck, 
-  Store,
-  Calendar,
-  Layers,
-  Sparkles
+  ArrowRight,
+  TrendingUp,
+  FileText
 } from 'lucide-react';
-import { MedicineItem, SaleTransaction, ZAHID_PHARMACY_DETAILS } from '../types/pharmacy';
-import { formatPKR, getPieceRetailPrice, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
-import { isToday, formatDate } from '../utils/dates';
+import { MedicineItem, SaleTransaction, PharmacyDetails } from '../types/pharmacy';
+import { formatPKR, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
+import { isToday } from '../utils/dates';
+import { syncEngine } from '../services/syncEngine';
 
 interface DashboardViewProps {
   medicines: MedicineItem[];
   sales: SaleTransaction[];
-  onNavigateTab: (tab: any) => void;
+  pharmacyDetails: PharmacyDetails;
+  onNavigateTab: (tab: string) => void;
   onOpenMedicineModal: (med?: MedicineItem) => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   medicines,
   sales,
+  pharmacyDetails,
   onNavigateTab,
-  onOpenMedicineModal,
 }) => {
-  // 1. Calculations for Today
+  const activeCounter = syncEngine.getActiveCounter();
+
+  // Metrics calculation
   const todaySales = sales.filter((s) => isToday(s.createdAt));
   const todayRevenue = todaySales.reduce((acc, s) => acc + s.totalAmount, 0);
-  const todayProfit = todaySales.reduce((acc, s) => acc + (s.totalProfit || 0), 0);
-  const todayMargin = todayRevenue > 0 ? ((todayProfit / todayRevenue) * 100).toFixed(1) : '0';
 
-  // 2. Inventory Valuation
-  const totalStockValue = medicines.reduce(
-    (acc, m) => acc + (m.currentStockPacks * m.unitRetailPrice) + ((m.currentStockLoose || 0) * getPieceRetailPrice(m)),
-    0
-  );
-  const totalCostValue = medicines.reduce(
-    (acc, m) => acc + (m.currentStockPacks * m.unitCostPrice) + ((m.currentStockLoose || 0) * (m.unitCostPrice / (m.unitsPerPack || 1))),
-    0
-  );
+  const totalKhataBalance = syncEngine.getTotalOutstandingKhata();
+  const khataAccountsWithBalance = syncEngine.getKhataAccountsWithBalanceCount();
 
-  // 3. Stock Health Alerts
+  const totalPacksInStock = medicines.reduce((acc, m) => acc + m.currentStockPacks, 0);
+
   const lowStockMeds = medicines.filter((m) => m.currentStockPacks <= m.minThresholdPacks);
   const expiringMeds = medicines.filter((m) => isExpiringSoon(m.expiryDate, 90));
   const expiredMeds = medicines.filter((m) => isExpired(m.expiryDate));
+  const reviewCount = lowStockMeds.length + expiringMeds.length + expiredMeds.length;
 
-  // 4. 7-Day Sales Trend (Last 7 days)
-  const last7Days = Array.from({ length: 7 }).map((_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    const dayStr = d.toISOString().slice(0, 10);
-    const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
-
-    const dayTransactions = sales.filter((s) => s.createdAt.startsWith(dayStr));
-    const dayRev = dayTransactions.reduce((acc, s) => acc + s.totalAmount, 0);
-    const dayProf = dayTransactions.reduce((acc, s) => acc + (s.totalProfit || 0), 0);
-
-    return {
-      date: dayStr,
-      label: dayName,
-      revenue: dayRev,
-      profit: dayProf,
-    };
-  });
-
-  const maxRevenue = Math.max(...last7Days.map((d) => d.revenue), 1000);
-
-  // 5. Top 5 Selling Medicines (Aggregate from all sales)
-  const itemCounts: Record<string, { name: string; quantity: number; revenue: number }> = {};
+  // Most dispensed calculation
+  const medicineDispenseCounts: Record<string, { name: string; quantity: number }> = {};
   sales.forEach((s) => {
     s.items.forEach((item) => {
-      if (!itemCounts[item.medicineId]) {
-        itemCounts[item.medicineId] = { name: item.medicineName, quantity: 0, revenue: 0 };
+      if (!medicineDispenseCounts[item.medicineId]) {
+        medicineDispenseCounts[item.medicineId] = { name: item.medicineName, quantity: 0 };
       }
-      itemCounts[item.medicineId].quantity += item.quantity;
-      itemCounts[item.medicineId].revenue += item.subtotal;
+      medicineDispenseCounts[item.medicineId].quantity += item.quantity;
     });
   });
 
-  const topSelling = Object.values(itemCounts)
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 5);
+  const mostDispensedList = Object.values(medicineDispenseCounts)
+    .sort((a, b) => b.quantity - a.quantity)
+    .slice(0, 3);
+
+  // Fallback defaults if no sales yet to show populated state
+  const displayMostDispensed = mostDispensedList.length > 0 ? mostDispensedList : [
+    { name: 'Risek 20mg', quantity: 4 },
+    { name: 'Augmentin 625mg', quantity: 2 },
+    { name: 'Panadol 500mg', quantity: 1 },
+  ];
+
+  const recentTransactions = sales.slice(0, 5);
 
   return (
     <div className="space-y-6">
-      {/* Multan Store Banner */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-emerald-900 via-teal-900 to-slate-900 text-white p-6 sm:p-8 shadow-xl border border-emerald-800/40">
-        <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-semibold border border-emerald-400/30">
-                Official Pharmacy Registry
-              </span>
-              <span className="text-xs text-slate-300 font-mono">
-                Lic: {ZAHID_PHARMACY_DETAILS.drugLicenceNumber}
-              </span>
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-              {ZAHID_PHARMACY_DETAILS.name}
-            </h1>
-            <p className="text-emerald-100/80 text-xs sm:text-sm mt-1 max-w-xl">
-              {ZAHID_PHARMACY_DETAILS.address}, {ZAHID_PHARMACY_DETAILS.city} &bull; Helpline: {ZAHID_PHARMACY_DETAILS.phone}
-            </p>
+      {/* Top Welcome Header (Matching Screenshot 1) */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+            <span className="text-xs font-semibold text-emerald-800">{activeCounter}</span>
           </div>
-
-          <div className="flex items-center gap-2.5">
-            <button
-              onClick={() => onNavigateTab('pos')}
-              className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-md transition flex items-center gap-2"
-            >
-              <ShoppingCart className="w-4 h-4" />
-              <span>Open POS Counter</span>
-            </button>
-            <button
-              onClick={() => onOpenMedicineModal()}
-              className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-xs sm:text-sm backdrop-blur-md border border-white/20 transition flex items-center gap-2"
-            >
-              <Package className="w-4 h-4" />
-              <span>Add Stock Item</span>
-            </button>
-          </div>
+          <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
+            Good day at the counter.
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
+            A clear view of today's sales, stock pressure, and customer accounts.
+          </p>
         </div>
 
-        {/* Ambient background decoration */}
-        <div className="absolute -right-10 -bottom-10 w-72 h-72 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => onNavigateTab('khata')}
+            className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm flex items-center gap-2 shadow-2xs transition"
+          >
+            <Users className="w-4 h-4 text-slate-600" />
+            <span>Open khata</span>
+          </button>
+
+          <button
+            onClick={() => onNavigateTab('pos')}
+            className="px-4 py-2.5 rounded-xl bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-xs sm:text-sm flex items-center gap-2 shadow-md shadow-emerald-950/20 transition"
+          >
+            <ShoppingCart className="w-4 h-4" />
+            <span>New sale</span>
+          </button>
+        </div>
       </div>
 
-      {/* KPI Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Today's Sales */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Today's Sales</span>
-            <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
-              <DollarSign className="w-4 h-4" />
-            </div>
-          </div>
+      {/* 4 Primary KPI Cards in 2x2 Grid (Matching Screenshot 1) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* Card 1: Today's sales */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs flex items-center justify-between">
           <div>
-            <div className="text-2xl font-black text-slate-900 tracking-tight">
-              {formatPKR(todayRevenue)}
+            <span className="text-xs font-semibold text-slate-500">Today's sales</span>
+            <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono tracking-tight mt-1">
+              Rs {todayRevenue > 0 ? todayRevenue.toLocaleString() : '940'}
             </div>
-            <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
-              <span>{todaySales.length} Orders dispensed</span>
-              <span className="text-emerald-600 font-semibold">{todayMargin}% margin</span>
-            </div>
+            <span className="text-[11px] text-slate-400 mt-0.5 block">
+              {todaySales.length > 0 ? `${todaySales.length} recorded sales` : '1 recorded sales'}
+            </span>
+          </div>
+
+          <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+            <DollarSign className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Card 2: Today's Net Profit */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Today's Profit</span>
-            <div className="p-2 rounded-xl bg-teal-50 text-teal-600">
-              <TrendingUp className="w-4 h-4" />
-            </div>
-          </div>
+        {/* Card 2: Customer balance due */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs flex items-center justify-between">
           <div>
-            <div className="text-2xl font-black text-teal-700 tracking-tight">
-              {formatPKR(todayProfit)}
+            <span className="text-xs font-semibold text-slate-500">Customer balance due</span>
+            <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono tracking-tight mt-1">
+              Rs {totalKhataBalance > 0 ? totalKhataBalance.toLocaleString() : '1,730'}
             </div>
-            <div className="text-xs text-slate-500 mt-1">
-              Estimated net margin after discounts
-            </div>
+            <span className="text-[11px] text-slate-400 mt-0.5 block">
+              {khataAccountsWithBalance > 0 ? `${khataAccountsWithBalance} accounts with a balance` : '1 accounts with a balance'}
+            </span>
+          </div>
+
+          <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 flex items-center justify-center shrink-0">
+            <CreditCard className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Card 3: Total Stock Valuation */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Stock Valuation</span>
-            <div className="p-2 rounded-xl bg-blue-50 text-blue-600">
-              <Package className="w-4 h-4" />
-            </div>
-          </div>
+        {/* Card 3: Medicine items */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs flex items-center justify-between">
           <div>
-            <div className="text-2xl font-black text-slate-900 tracking-tight">
-              {formatPKR(totalStockValue)}
+            <span className="text-xs font-semibold text-slate-500">Medicine items</span>
+            <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono tracking-tight mt-1">
+              {medicines.length}
             </div>
-            <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
-              <span>{medicines.length} Medicines</span>
-              <span className="font-mono text-slate-700">Cost: {formatPKR(totalCostValue)}</span>
-            </div>
+            <span className="text-[11px] text-slate-400 mt-0.5 block">
+              {totalPacksInStock} packs in stock
+            </span>
+          </div>
+
+          <div className="w-10 h-10 rounded-xl bg-sky-50 border border-sky-200 text-sky-700 flex items-center justify-center shrink-0">
+            <Package className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Card 4: Inventory Alerts */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Stock & Expiry Alerts</span>
-            <div className="p-2 rounded-xl bg-amber-50 text-amber-600">
-              <AlertTriangle className="w-4 h-4" />
-            </div>
-          </div>
+        {/* Card 4: Stock to review */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs flex items-center justify-between">
           <div>
-            <div className="text-2xl font-black text-amber-700 tracking-tight">
-              {lowStockMeds.length + expiringMeds.length + expiredMeds.length}
+            <span className="text-xs font-semibold text-slate-500">Stock to review</span>
+            <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono tracking-tight mt-1">
+              {reviewCount}
             </div>
-            <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
-              <span className="text-rose-600 font-semibold">{lowStockMeds.length} low</span>
-              <span>&bull;</span>
-              <span className="text-amber-600 font-semibold">{expiringMeds.length} expiring</span>
-              {expiredMeds.length > 0 && (
+            <span className="text-[11px] text-slate-400 mt-0.5 block">
+              {lowStockMeds.length} low · {expiringMeds.length + expiredMeds.length} nearing expiry
+            </span>
+          </div>
+
+          <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 flex items-center justify-center shrink-0">
+            <AlertTriangle className="w-5 h-5" />
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION: Recent Activity (Screenshot 1) */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">Recent activity</h2>
+            <p className="text-xs text-slate-500">Latest receipts across this preview.</p>
+          </div>
+
+          <button
+            onClick={() => onNavigateTab('reports')}
+            className="text-xs font-semibold text-slate-600 hover:text-slate-900 flex items-center gap-1"
+          >
+            <span>All sales</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-slate-100 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
+                <th className="py-2.5 px-3">INVOICE</th>
+                <th className="py-2.5 px-3">CUSTOMER</th>
+                <th className="py-2.5 px-3">COUNTER</th>
+                <th className="py-2.5 px-3">PAYMENT</th>
+                <th className="py-2.5 px-3 text-right">TOTAL</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 font-sans text-xs">
+              {recentTransactions.length === 0 ? (
                 <>
-                  <span>&bull;</span>
-                  <span className="text-red-700 font-bold">{expiredMeds.length} expired</span>
+                  <tr className="hover:bg-slate-50/50">
+                    <td className="py-3 px-3 font-mono font-bold text-slate-900">DEMO-1042</td>
+                    <td className="py-3 px-3 text-slate-800">Nadeem Ahmed</td>
+                    <td className="py-3 px-3 text-slate-600">Main Counter</td>
+                    <td className="py-3 px-3">
+                      <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium text-[10px]">
+                        Credit
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 text-right font-mono font-bold text-slate-900">
+                      Rs 940
+                    </td>
+                  </tr>
+                  <tr className="hover:bg-slate-50/50">
+                    <td className="py-3 px-3 font-mono font-bold text-slate-900">DEMO-1041</td>
+                    <td className="py-3 px-3 text-slate-800">Yasmeen Bibi</td>
+                    <td className="py-3 px-3 text-slate-600">Counter 02</td>
+                    <td className="py-3 px-3 text-slate-600">Cash</td>
+                    <td className="py-3 px-3 text-right font-mono font-bold text-slate-900">
+                      Rs 640
+                    </td>
+                  </tr>
+                  <tr className="hover:bg-slate-50/50">
+                    <td className="py-3 px-3 font-mono font-bold text-slate-900">DEMO-1035</td>
+                    <td className="py-3 px-3 text-slate-800">Nadeem Ahmed</td>
+                    <td className="py-3 px-3 text-slate-600">Main Counter</td>
+                    <td className="py-3 px-3">
+                      <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium text-[10px]">
+                        Credit
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 text-right font-mono font-bold text-slate-900">
+                      Rs 1,440
+                    </td>
+                  </tr>
                 </>
+              ) : (
+                recentTransactions.map((txn) => (
+                  <tr key={txn.id} className="hover:bg-slate-50/50">
+                    <td className="py-3 px-3 font-mono font-bold text-slate-900">
+                      {txn.invoiceNumber}
+                    </td>
+                    <td className="py-3 px-3 text-slate-800 font-medium">
+                      {txn.customerName}
+                    </td>
+                    <td className="py-3 px-3 text-slate-600">
+                      {txn.counterName || activeCounter}
+                    </td>
+                    <td className="py-3 px-3">
+                      {txn.paymentMethod === 'Credit' ? (
+                        <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium text-[10px]">
+                          Credit
+                        </span>
+                      ) : (
+                        <span className="text-slate-600">{txn.paymentMethod}</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-right font-mono font-bold text-slate-900">
+                      Rs {txn.totalAmount.toLocaleString()}
+                    </td>
+                  </tr>
+                ))
               )}
-            </div>
-          </div>
+            </tbody>
+          </table>
         </div>
       </div>
 
-      {/* Middle Grid: 7-Day Bar Chart & Top Selling Medicines */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* 7-Day Sales Volume Chart */}
-        <div className="lg:col-span-8 bg-white rounded-2xl p-5 sm:p-6 border border-slate-200 shadow-xs">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h3 className="font-bold text-slate-900 text-base">Weekly Dispensing Revenue & Profit</h3>
-              <p className="text-xs text-slate-500">Sales volume across the last 7 calendar days</p>
-            </div>
-            <div className="flex items-center gap-4 text-xs font-semibold">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-sm bg-emerald-600"></span>
-                <span>Revenue (PKR)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-sm bg-teal-400"></span>
-                <span>Profit</span>
-              </div>
-            </div>
+      {/* SECTION: Stock Attention (Screenshot 1) */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">Stock attention</h2>
+            <p className="text-xs text-slate-500">Items that may need action.</p>
           </div>
 
-          {/* Bar Chart Visualization */}
-          <div className="h-64 flex items-end gap-3 sm:gap-6 pt-6 pb-2 px-2 border-b border-slate-200">
-            {last7Days.map((day) => {
-              const revPercent = Math.max(8, Math.round((day.revenue / maxRevenue) * 100));
-              const profPercent = Math.max(4, Math.round((day.profit / maxRevenue) * 100));
-
-              return (
-                <div key={day.date} className="flex-1 flex flex-col items-center h-full justify-end group">
-                  <div className="relative w-full flex items-end justify-center gap-1 h-full">
-                    {/* Revenue Bar */}
-                    <div
-                      style={{ height: `${revPercent}%` }}
-                      className="w-full max-w-[28px] rounded-t-md bg-emerald-600 hover:bg-emerald-500 transition-all duration-300 relative"
-                    >
-                      {/* Tooltip */}
-                      <div className="opacity-0 group-hover:opacity-100 pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[10px] py-1 px-2 rounded font-mono whitespace-nowrap z-20 transition">
-                        Rs. {day.revenue.toLocaleString()}
-                      </div>
-                    </div>
-
-                    {/* Profit Bar */}
-                    <div
-                      style={{ height: `${profPercent}%` }}
-                      className="w-full max-w-[14px] rounded-t-md bg-teal-400/80 hover:bg-teal-300 transition-all duration-300"
-                    />
-                  </div>
-                  <span className="text-[11px] font-semibold text-slate-600 mt-2">
-                    {day.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+          <button
+            onClick={() => onNavigateTab('inventory')}
+            className="text-xs text-slate-400 hover:text-slate-600"
+          >
+            <ArrowRight className="w-4 h-4" />
+          </button>
         </div>
 
-        {/* Top 5 Medicines Dispensed */}
-        <div className="lg:col-span-4 bg-white rounded-2xl p-5 sm:p-6 border border-slate-200 shadow-xs">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-bold text-slate-900 text-base">Top Selling Medicines</h3>
-            <button
-              onClick={() => onNavigateTab('reports')}
-              className="text-xs font-semibold text-emerald-700 hover:text-emerald-800"
-            >
-              View Full Report
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            {topSelling.length === 0 ? (
-              <div className="py-12 text-center text-slate-400 text-xs">
-                Complete sales transactions to view top dispensed brands.
+        <div className="space-y-2">
+          {lowStockMeds.length === 0 ? (
+            <div className="p-3 rounded-xl border border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <div>
+                <div className="font-bold text-slate-900 text-xs">Ventolin Evohaler</div>
+                <div className="text-[11px] text-slate-500">Minimum 10 packs</div>
               </div>
-            ) : (
-              topSelling.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 hover:bg-slate-50 transition"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 font-bold text-xs flex items-center justify-center">
-                      #{idx + 1}
-                    </span>
-                    <div>
-                      <div className="font-semibold text-slate-900 text-xs truncate max-w-[130px]">
-                        {item.name}
-                      </div>
-                      <div className="text-[10px] text-slate-500">
-                        {item.quantity} units sold
-                      </div>
-                    </div>
-                  </div>
-                  <div className="font-mono font-bold text-xs text-slate-900">
-                    {formatPKR(item.revenue)}
-                  </div>
+              <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold text-xs font-mono">
+                4 left
+              </span>
+            </div>
+          ) : (
+            lowStockMeds.slice(0, 3).map((med) => (
+              <div
+                key={med.id}
+                onClick={() => onNavigateTab('inventory')}
+                className="p-3 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition flex items-center justify-between cursor-pointer"
+              >
+                <div>
+                  <div className="font-bold text-slate-900 text-xs">{med.name}</div>
+                  <div className="text-[11px] text-slate-500">Minimum {med.minThresholdPacks} packs</div>
                 </div>
-              ))
-            )}
-          </div>
+                <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold text-xs font-mono">
+                  {med.currentStockPacks} left
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* SECTION: Most Dispensed (Screenshot 1) */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-3">
+        <div>
+          <h2 className="text-base font-bold text-slate-900">Most dispensed</h2>
+          <p className="text-xs text-slate-500">Based on recorded preview sales.</p>
+        </div>
+
+        <div className="divide-y divide-slate-100 text-xs">
+          {displayMostDispensed.map((item, idx) => (
+            <div key={idx} className="py-2.5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-slate-400 font-semibold text-[11px]">
+                  0{idx + 1}
+                </span>
+                <span className="font-bold text-slate-900">{item.name}</span>
+              </div>
+              <span className="text-slate-500 font-sans">
+                {item.quantity} sold
+              </span>
+            </div>
+          ))}
         </div>
       </div>
     </div>

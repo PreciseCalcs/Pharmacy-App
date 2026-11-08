@@ -37,8 +37,9 @@ export interface UserAccount {
   id: string;
   name: string;
   role: UserRole;
-  pin: string; // 4-6 digit numeric PIN
+  pin: string; // 4-6 digit numeric PIN / password
   phone?: string;
+  email?: string;
   isActive: boolean;
   lastLogin?: string;
 }
@@ -52,17 +53,17 @@ export interface MedicineItem {
   category: MedicineCategory;
   dosageForm: DosageForm;
   strength: string;
-  unitsPerPack: number; // e.g. 20 tablets per pack / 1 bottle per pack
-  unitCostPrice: number; // Cost price per pack in PKR
-  unitRetailPrice: number; // Retail price per pack in PKR
-  looseCostPrice: number; // Cost price per single piece/strip
-  looseRetailPrice: number; // Retail price per single piece/strip
-  currentStockPacks: number; // Packs on shelf
-  currentStockLoose: number; // Loose pieces on shelf
-  minThresholdPacks: number; // Alert threshold
+  unitsPerPack: number;
+  unitCostPrice: number;
+  unitRetailPrice: number;
+  looseCostPrice: number;
+  looseRetailPrice: number;
+  currentStockPacks: number;
+  currentStockLoose: number;
+  minThresholdPacks: number;
   batchNumber: string;
-  expiryDate: string; // YYYY-MM-DD
-  shelfLocation: string; // e.g., 'Rack A-2', 'Fridge 1'
+  expiryDate: string;
+  shelfLocation: string;
   manufacturer: string;
   requiresPrescription: boolean;
   supplier?: string;
@@ -73,7 +74,6 @@ export interface MedicineItem {
   updated?: string;
 }
 
-// Backward-compatibility alias for PocketBase table mapping
 export interface MedicineRecord {
   id: string;
   name: string;
@@ -116,6 +116,7 @@ export interface TransactionRecord {
   customer_name: string;
   customer_phone?: string;
   pharmacist_name: string;
+  counter_name?: string;
   payment_method: 'Cash' | 'Card' | 'Insurance' | 'Mobile Payment' | 'EasyPaisa' | 'JazzCash' | 'Credit';
   items: TransactionItem[];
   subtotal: number;
@@ -147,8 +148,8 @@ export interface SaleItem {
   unitType: 'pack' | 'loose';
   unitsPerPack: number;
   quantity: number;
-  pricePerUnit: number; // PKR
-  costPerUnit: number; // PKR
+  pricePerUnit: number;
+  costPerUnit: number;
   subtotal: number;
   profit: number;
   batchNumber: string;
@@ -159,9 +160,11 @@ export type PaymentMethod = 'Cash' | 'Card' | 'EasyPaisa' | 'JazzCash' | 'Credit
 
 export interface SaleTransaction {
   id: string;
-  invoiceNumber: string; // e.g., ZMS-2026-0042
+  invoiceNumber: string;
   customerName: string;
   customerPhone?: string;
+  customerId?: string;
+  counterName?: string;
   staffName: string;
   staffRole: UserRole;
   paymentMethod: PaymentMethod;
@@ -196,23 +199,169 @@ export interface PharmacyDetails {
   address: string;
   city: string;
   drugLicenceNumber: string;
+  ntnNumber?: string;
   phone: string;
   emergencyPhone?: string;
-  taxNumber?: string;
+  ownerName?: string;
+  ownerTitle?: string;
+  ownerPhone?: string;
+  ownerEmail?: string;
+  logoUrl?: string;
   tagline: string;
   thankYouMessage: string;
+  pocketBaseUrl?: string;
 }
 
-export const ZAHID_PHARMACY_DETAILS: PharmacyDetails = {
+export interface PharmacyCounter {
+  id: string;
+  name: string;
+  locationNote: string;
+  isDefault?: boolean;
+}
+
+export interface KhataEntry {
+  id: string;
+  type: 'sale' | 'payment';
+  invoiceNumber?: string;
+  description: string;
+  amount: number;
+  paymentMethod?: string;
+  date: string;
+  note?: string;
+}
+
+export interface CustomerKhata {
+  id: string;
+  name: string;
+  phone: string;
+  address?: string;
+  balanceDue: number; // >0 means customer owes pharmacy
+  history: KhataEntry[];
+  updatedAt: string;
+  createdAt: string;
+}
+
+export const DEFAULT_PHARMACY_DETAILS: PharmacyDetails = {
   name: 'Zahid Medical Store',
   address: 'Main Bazar Ghazipur Jalalpur Pirwala',
   city: 'Multan, Punjab, Pakistan',
   drugLicenceNumber: '04-361-0047-139936M',
+  ntnNumber: '7482910-4',
   phone: '03067617080',
   emergencyPhone: '03007307080',
+  ownerName: 'Dr. Zahid Hussain',
+  ownerTitle: 'Owner / Pharmacist',
+  ownerPhone: '03067617080',
+  ownerEmail: 'zahid.pharmacy.multan@gmail.com',
   tagline: 'Your Trusted Health & Community Pharmacy',
   thankYouMessage: 'Thank you for your visit. Medicines once sold can only be exchanged within 3 days with receipt under safe storage conditions.',
+  pocketBaseUrl: 'http://127.0.0.1:8090',
 };
+
+export const ZAHID_PHARMACY_DETAILS: PharmacyDetails = DEFAULT_PHARMACY_DETAILS;
+
+export const DEFAULT_COUNTERS: PharmacyCounter[] = [
+  { id: 'cnt_main', name: 'Main Counter', locationNote: 'Front register', isDefault: true },
+  { id: 'cnt_02', name: 'Counter 02', locationNote: 'Second register' },
+  { id: 'cnt_03', name: 'Counter 3', locationNote: 'Dispense counter' },
+];
+
+export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
+  {
+    id: 'kht_nadeem_01',
+    name: 'Nadeem Ahmed',
+    phone: '0300 123 4567',
+    address: 'Ghazipur Jalalpur Pirwala',
+    balanceDue: 1630,
+    updatedAt: '2026-11-08T09:30:00.000Z',
+    createdAt: '2026-11-01T10:00:00.000Z',
+    history: [
+      {
+        id: 'ent_01',
+        type: 'payment',
+        description: 'Payment · Cash',
+        amount: 100,
+        paymentMethod: 'Cash',
+        date: '2026-11-08T09:30:00.000Z',
+        note: 'Counter payment',
+      },
+      {
+        id: 'ent_02',
+        type: 'sale',
+        invoiceNumber: 'DEMO-1042',
+        description: 'Credit sale · DEMO-1042',
+        amount: 940,
+        paymentMethod: 'Credit',
+        date: '2026-11-08T08:15:00.000Z',
+      },
+      {
+        id: 'ent_03',
+        type: 'sale',
+        invoiceNumber: 'DEMO-1035',
+        description: 'Credit sale · DEMO-1035',
+        amount: 1440,
+        paymentMethod: 'Credit',
+        date: '2026-11-07T14:20:00.000Z',
+      },
+      {
+        id: 'ent_04',
+        type: 'payment',
+        description: 'Payment · Cash · Part payment',
+        amount: 250,
+        paymentMethod: 'Cash',
+        date: '2026-11-07T11:00:00.000Z',
+        note: 'Part payment',
+      },
+    ],
+  },
+  {
+    id: 'kht_yasmeen_02',
+    name: 'Yasmeen Bibi',
+    phone: '0301 234 5678',
+    address: 'Mohallah Shaikhan',
+    balanceDue: 0,
+    updatedAt: '2026-11-08T10:00:00.000Z',
+    createdAt: '2026-11-02T11:00:00.000Z',
+    history: [
+      {
+        id: 'ent_05',
+        type: 'sale',
+        invoiceNumber: 'DEMO-1041',
+        description: 'Credit sale · DEMO-1041',
+        amount: 640,
+        paymentMethod: 'Credit',
+        date: '2026-11-08T07:45:00.000Z',
+      },
+      {
+        id: 'ent_06',
+        type: 'payment',
+        description: 'Payment · Cash · Full settlement',
+        amount: 640,
+        paymentMethod: 'Cash',
+        date: '2026-11-08T10:00:00.000Z',
+      },
+    ],
+  },
+  {
+    id: 'kht_hamza_03',
+    name: 'Hamza Ali',
+    phone: '0302 345 6789',
+    address: 'Main Bazar',
+    balanceDue: 0,
+    updatedAt: '2026-11-06T16:00:00.000Z',
+    createdAt: '2026-11-03T09:00:00.000Z',
+    history: [
+      {
+        id: 'ent_07',
+        type: 'payment',
+        description: 'Payment · EasyPaisa',
+        amount: 450,
+        paymentMethod: 'EasyPaisa',
+        date: '2026-11-06T16:00:00.000Z',
+      },
+    ],
+  },
+];
 
 export type PrintFormat = 'thermal-80' | 'thermal-58' | 'a4';
 

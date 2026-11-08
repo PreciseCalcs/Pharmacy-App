@@ -7,10 +7,11 @@ const LOCK_STATE_KEY = 'zahid_screen_locked_v2';
 const DEFAULT_USERS: UserAccount[] = [
   {
     id: 'usr_owner_01',
-    name: 'Dr. Zahid Hussain (RPh)',
+    name: 'Dr. Zahid Hussain',
     role: 'owner',
     pin: '7788',
     phone: '03067617080',
+    email: 'zahid.pharmacy.multan@gmail.com',
     isActive: true,
   },
   {
@@ -19,6 +20,7 @@ const DEFAULT_USERS: UserAccount[] = [
     role: 'pharmacist',
     pin: '1234',
     phone: '03001234567',
+    email: 'pharmacist@zahidmed.com',
     isActive: true,
   },
   {
@@ -27,6 +29,7 @@ const DEFAULT_USERS: UserAccount[] = [
     role: 'cashier',
     pin: '0000',
     phone: '03019876543',
+    email: 'cashier@zahidmed.com',
     isActive: true,
   },
 ];
@@ -62,7 +65,7 @@ class StaffAuthService {
 
       const lockState = localStorage.getItem(LOCK_STATE_KEY);
       this.locked = lockState === 'true';
-    } catch (e) {
+    } catch {
       this.users = [...DEFAULT_USERS];
       this.currentUser = this.users[0];
     }
@@ -141,7 +144,7 @@ class StaffAuthService {
     return { success: true, message: 'Security PIN updated successfully' };
   }
 
-  public addStaff(data: Omit<UserAccount, 'id'>): { success: boolean; message?: string } {
+  public addStaff(data: Omit<UserAccount, 'id'>): { success: boolean; message?: string; user?: UserAccount } {
     if (this.users.some((u) => u.pin === data.pin)) {
       return { success: false, message: 'PIN is already in use by another staff member' };
     }
@@ -152,7 +155,7 @@ class StaffAuthService {
     };
     this.users.push(newUser);
     this.saveUsers();
-    return { success: true };
+    return { success: true, user: newUser };
   }
 
   public updateStaff(user: UserAccount): { success: boolean; message?: string } {
@@ -164,6 +167,28 @@ class StaffAuthService {
     this.users = this.users.map((u) => (u.id === user.id ? user : u));
     if (this.currentUser?.id === user.id) {
       this.currentUser = user;
+    }
+    this.saveUsers();
+    return { success: true };
+  }
+
+  public editUserAccount(
+    userId: string,
+    updates: Partial<Pick<UserAccount, 'name' | 'role' | 'pin' | 'phone' | 'email' | 'isActive'>>
+  ): { success: boolean; message?: string } {
+    const target = this.users.find((u) => u.id === userId);
+    if (!target) return { success: false, message: 'User not found' };
+
+    if (updates.pin && updates.pin !== target.pin) {
+      const conflict = this.users.some((u) => u.id !== userId && u.pin === updates.pin);
+      if (conflict) {
+        return { success: false, message: 'PIN is already assigned to another staff member' };
+      }
+    }
+
+    Object.assign(target, updates);
+    if (this.currentUser?.id === userId) {
+      this.currentUser = { ...target };
     }
     this.saveUsers();
     return { success: true };

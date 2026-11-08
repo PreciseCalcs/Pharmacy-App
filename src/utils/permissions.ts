@@ -22,9 +22,9 @@ export interface RoleDetail {
 export const ROLE_INFO: Record<UserRole, RoleDetail> = {
   owner: {
     role: 'owner',
-    label: 'Chief Pharmacist / Owner',
+    label: 'Owner / Pharmacist',
     badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-300',
-    description: 'Full administrative access: pricing, profit analysis, stock adjustment, audits, and staff management.',
+    description: 'Full administrative access: settings, pricing, profit analysis, stock adjustment, audits, and staff management.',
     permissions: {
       canDispense: true,
       canViewInventory: true,
@@ -42,7 +42,7 @@ export const ROLE_INFO: Record<UserRole, RoleDetail> = {
     role: 'pharmacist',
     label: 'Registered Pharmacist',
     badgeColor: 'bg-blue-100 text-blue-800 border-blue-300',
-    description: 'Clinical dispense, stock editing, receipt printing, and expiry management.',
+    description: 'Clinical dispense, stock editing, khata management, receipt printing, and expiry management.',
     permissions: {
       canDispense: true,
       canViewInventory: true,
@@ -60,7 +60,7 @@ export const ROLE_INFO: Record<UserRole, RoleDetail> = {
     role: 'cashier',
     label: 'Counter Cashier',
     badgeColor: 'bg-amber-100 text-amber-800 border-amber-300',
-    description: 'POS sales, barcode scanning, cash tender, and receipt generation only.',
+    description: 'POS sales, barcode scanning, credit khata viewing, cash tender, and receipt generation.',
     permissions: {
       canDispense: true,
       canViewInventory: true,
@@ -85,15 +85,15 @@ export function can(role: UserRole, action: keyof RoleDetail['permissions']): bo
 export function canOpenTab(role: UserRole, tab: string): boolean {
   if (role === 'owner') return true;
   if (role === 'pharmacist') {
-    return ['dashboard', 'pos', 'inventory', 'reports'].includes(tab);
+    return ['overview', 'dashboard', 'pos', 'inventory', 'khata', 'reports'].includes(tab);
   }
   if (role === 'cashier') {
-    return ['pos', 'inventory'].includes(tab);
+    return ['overview', 'dashboard', 'pos', 'inventory', 'khata'].includes(tab);
   }
   return false;
 }
 
 export function defaultTabFor(role: UserRole): string {
   if (role === 'cashier') return 'pos';
-  return 'dashboard';
+  return 'overview';
 }
