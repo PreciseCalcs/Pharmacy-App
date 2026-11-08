@@ -16,7 +16,9 @@ import {
   X,
   ShieldCheck,
   Building2,
-  HardDrive
+  HardDrive,
+  Keyboard,
+  HelpCircle
 } from 'lucide-react';
 import { 
   ConnectionStatus, 
@@ -80,6 +82,7 @@ export default function App() {
   const [medicineForLabel, setMedicineForLabel] = useState<MedicineItem | null>(null);
   const [isLinkCodeModalOpen, setIsLinkCodeModalOpen] = useState(false);
   const [unrecognizedCode, setUnrecognizedCode] = useState('');
+  const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
 
   // Hardware Scanner buffer
   const barcodeBufferRef = useRef<string>('');
@@ -130,12 +133,124 @@ export default function App() {
     };
   }, [refreshHealth]);
 
-  // Global Hardware USB Scanner Listener
+  // Global Keyboard Shortcuts & Hardware Scanner Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
+      const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
 
+      const hasCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+      // 1. Primary Global Navigation & Action Shortcuts (Ctrl+Key or Cmd+Key)
+      if (hasCtrlOrCmd && !e.shiftKey) {
+        const key = e.key.toLowerCase();
+        if (key === 'p') {
+          e.preventDefault();
+          setActiveTab('pos');
+          setIsMobileMenuOpen(false);
+          soundService.click();
+          showToast('⚡ Point of Sale (Ctrl+P)', 'success');
+          return;
+        }
+        if (key === 'i') {
+          e.preventDefault();
+          setActiveTab('inventory');
+          setIsMobileMenuOpen(false);
+          soundService.click();
+          showToast('⚡ Medicine & Product Stock (Ctrl+I)', 'success');
+          return;
+        }
+        if (key === 's') {
+          e.preventDefault();
+          setActiveTab('settings');
+          setIsMobileMenuOpen(false);
+          soundService.click();
+          showToast('⚡ Pharmacy Settings (Ctrl+S)', 'success');
+          return;
+        }
+        if (key === 'o') {
+          e.preventDefault();
+          setActiveTab('overview');
+          setIsMobileMenuOpen(false);
+          soundService.click();
+          showToast('⚡ Overview Dashboard (Ctrl+O)', 'success');
+          return;
+        }
+        if (key === 'k') {
+          e.preventDefault();
+          setActiveTab('khata');
+          setIsMobileMenuOpen(false);
+          soundService.click();
+          showToast('⚡ Credit Khata Accounts (Ctrl+K)', 'success');
+          return;
+        }
+        if (key === 'r') {
+          e.preventDefault();
+          setActiveTab('reports');
+          setIsMobileMenuOpen(false);
+          soundService.click();
+          showToast('⚡ Sales & Financial Reports (Ctrl+R)', 'success');
+          return;
+        }
+        if (key === 'n') {
+          e.preventDefault();
+          setSelectedMedicineForEdit(null);
+          setIsMedicineModalOpen(true);
+          soundService.click();
+          showToast('⚡ Register Product Item (Ctrl+N)', 'success');
+          return;
+        }
+        if (key === 'l') {
+          e.preventDefault();
+          handleLock();
+          showToast('🔒 Register Counter Locked (Ctrl+L)', 'warn');
+          return;
+        }
+        if (key === '/') {
+          e.preventDefault();
+          setIsShortcutsModalOpen(true);
+          soundService.click();
+          return;
+        }
+      }
+
+      // 2. Alt+ Key Alternatives (for users who prefer Alt navigation)
+      if (e.altKey && !hasCtrlOrCmd) {
+        const key = e.key.toLowerCase();
+        if (key === 'p') { e.preventDefault(); setActiveTab('pos'); soundService.click(); showToast('⚡ Point of Sale (Alt+P)', 'success'); return; }
+        if (key === 'i') { e.preventDefault(); setActiveTab('inventory'); soundService.click(); showToast('⚡ Stock (Alt+I)', 'success'); return; }
+        if (key === 's') { e.preventDefault(); setActiveTab('settings'); soundService.click(); showToast('⚡ Settings (Alt+S)', 'success'); return; }
+        if (key === 'o') { e.preventDefault(); setActiveTab('overview'); soundService.click(); showToast('⚡ Overview (Alt+O)', 'success'); return; }
+        if (key === 'k') { e.preventDefault(); setActiveTab('khata'); soundService.click(); showToast('⚡ Khata (Alt+K)', 'success'); return; }
+        if (key === 'r') { e.preventDefault(); setActiveTab('reports'); soundService.click(); showToast('⚡ Reports (Alt+R)', 'success'); return; }
+        if (key === 'n') { e.preventDefault(); setSelectedMedicineForEdit(null); setIsMedicineModalOpen(true); soundService.click(); return; }
+        if (key === 'l') { e.preventDefault(); handleLock(); return; }
+      }
+
+      // 3. F-keys and Help
+      if (e.key === 'F4') {
+        e.preventDefault();
+        setIsScannerModalOpen(true);
+        soundService.click();
+        return;
+      }
+      if (e.key === '?' && !isInput) {
+        e.preventDefault();
+        setIsShortcutsModalOpen(true);
+        soundService.click();
+        return;
+      }
+      if (e.key === 'Escape') {
+        setIsShortcutsModalOpen(false);
+        setIsMedicineModalOpen(false);
+        setIsScannerModalOpen(false);
+        setIsInvoiceModalOpen(false);
+        setIsLinkCodeModalOpen(false);
+        setIsAuthModalOpen(false);
+        setIsCounterDropdownOpen(false);
+      }
+
+      // 4. Hardware Barcode Gun Buffer
       const now = Date.now();
       const timeDiff = now - lastKeyTimeRef.current;
       lastKeyTimeRef.current = now;
@@ -147,7 +262,7 @@ export default function App() {
         if (candidateCode.length >= 4) {
           handleScannedCode(candidateCode);
         }
-      } else if (e.key.length === 1) {
+      } else if (e.key.length === 1 && !hasCtrlOrCmd && !e.altKey) {
         if (timeDiff > 120 && !isInput) {
           barcodeBufferRef.current = e.key;
         } else {
@@ -334,14 +449,20 @@ export default function App() {
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center gap-2.5 transition ${
+                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
                     activeTab === 'overview'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
                   }`}
+                  title="Overview (Ctrl+O)"
                 >
-                  <LayoutDashboard className="w-4 h-4" />
-                  <span>Overview</span>
+                  <div className="flex items-center gap-2.5">
+                    <LayoutDashboard className="w-4 h-4" />
+                    <span>Overview</span>
+                  </div>
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                    ^O
+                  </kbd>
                 </button>
 
                 <button
@@ -350,14 +471,20 @@ export default function App() {
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center gap-2.5 transition ${
+                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
                     activeTab === 'pos'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
                   }`}
+                  title="Point of sale (Ctrl+P)"
                 >
-                  <ShoppingCart className="w-4 h-4" />
-                  <span>Point of sale</span>
+                  <div className="flex items-center gap-2.5">
+                    <ShoppingCart className="w-4 h-4" />
+                    <span>Point of sale</span>
+                  </div>
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                    ^P
+                  </kbd>
                 </button>
               </div>
             </div>
@@ -374,14 +501,20 @@ export default function App() {
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center gap-2.5 transition ${
+                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
                     activeTab === 'inventory'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
                   }`}
+                  title="Medicine stock (Ctrl+I)"
                 >
-                  <Package className="w-4 h-4" />
-                  <span>Medicine stock</span>
+                  <div className="flex items-center gap-2.5">
+                    <Package className="w-4 h-4" />
+                    <span>Medicine stock</span>
+                  </div>
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                    ^I
+                  </kbd>
                 </button>
 
                 <button
@@ -395,16 +528,22 @@ export default function App() {
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
                   }`}
+                  title="Credit khata (Ctrl+K)"
                 >
                   <div className="flex items-center gap-2.5">
                     <Users className="w-4 h-4" />
                     <span>Credit khata</span>
                   </div>
-                  {khataActiveCount > 0 && (
-                    <span className="bg-amber-400 text-slate-950 text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center">
-                      {khataActiveCount}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    {khataActiveCount > 0 && (
+                      <span className="bg-amber-400 text-slate-950 text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center">
+                        {khataActiveCount}
+                      </span>
+                    )}
+                    <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                      ^K
+                    </kbd>
+                  </div>
                 </button>
 
                 <button
@@ -413,14 +552,20 @@ export default function App() {
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center gap-2.5 transition ${
+                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
                     activeTab === 'reports'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
                   }`}
+                  title="Sales reports (Ctrl+R)"
                 >
-                  <BarChart3 className="w-4 h-4" />
-                  <span>Sales reports</span>
+                  <div className="flex items-center gap-2.5">
+                    <BarChart3 className="w-4 h-4" />
+                    <span>Sales reports</span>
+                  </div>
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                    ^R
+                  </kbd>
                 </button>
               </div>
             </div>
@@ -437,14 +582,20 @@ export default function App() {
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center gap-2.5 transition ${
+                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
                     activeTab === 'settings'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
                   }`}
+                  title="Pharmacy settings (Ctrl+S)"
                 >
-                  <Settings className="w-4 h-4" />
-                  <span>Pharmacy settings</span>
+                  <div className="flex items-center gap-2.5">
+                    <Settings className="w-4 h-4" />
+                    <span>Pharmacy settings</span>
+                  </div>
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                    ^S
+                  </kbd>
                 </button>
               </div>
             </div>
@@ -543,10 +694,19 @@ export default function App() {
                 <span>Preview · local only</span>
               </div>
 
+              {/* Global Keyboard Shortcuts Help */}
+              <button
+                onClick={() => setIsShortcutsModalOpen(true)}
+                className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition"
+                title="Global Keyboard Shortcuts (Ctrl+/ or ?)"
+              >
+                <Keyboard className="w-4 h-4 text-emerald-800" />
+              </button>
+
               <button
                 onClick={() => setActiveTab('settings')}
                 className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition"
-                title="Open Settings"
+                title="Open Settings (Ctrl+S)"
               >
                 <Settings className="w-4 h-4" />
               </button>
@@ -707,6 +867,135 @@ export default function App() {
           setActiveTab('pos');
         }}
       />
+
+      {/* Keyboard Shortcuts Cheat Sheet Modal */}
+      {isShortcutsModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-5 bg-gradient-to-r from-[#072418] to-[#0c3927] text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center text-emerald-300">
+                  <Keyboard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base tracking-tight text-white">
+                    Pharmacist Shift Keyboard Shortcuts
+                  </h3>
+                  <p className="text-xs text-emerald-200/80">
+                    High-speed hotkeys to navigate tabs and speed up counter dispensing.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsShortcutsModalOpen(false)}
+                className="p-1.5 rounded-xl text-white/70 hover:text-white hover:bg-white/10 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto text-xs">
+              {/* Category 1: Navigation Hotkeys */}
+              <div>
+                <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider mb-3 text-emerald-800 flex items-center gap-2">
+                  <span>⚡ Instant View Navigation</span>
+                  <span className="text-[10px] text-slate-400 font-normal normal-case">(Works anywhere across the app)</span>
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {[
+                    { keys: ['Ctrl', 'P'], alt: 'Alt + P', desc: 'Point of Sale (POS Register)', tab: 'pos' },
+                    { keys: ['Ctrl', 'I'], alt: 'Alt + I', desc: 'Medicine Stock & Inventory', tab: 'inventory' },
+                    { keys: ['Ctrl', 'S'], alt: 'Alt + S', desc: 'Pharmacy Settings (Owner)', tab: 'settings' },
+                    { keys: ['Ctrl', 'O'], alt: 'Alt + O', desc: 'Overview Dashboard', tab: 'overview' },
+                    { keys: ['Ctrl', 'K'], alt: 'Alt + K', desc: 'Credit Khata Customer Ledger', tab: 'khata' },
+                    { keys: ['Ctrl', 'R'], alt: 'Alt + R', desc: 'Sales Audit & Reports', tab: 'reports' },
+                  ].map((s) => (
+                    <button
+                      key={s.desc}
+                      type="button"
+                      onClick={() => {
+                        setActiveTab(s.tab);
+                        setIsShortcutsModalOpen(false);
+                        soundService.click();
+                      }}
+                      className="p-3 rounded-xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/40 text-left transition flex items-center justify-between group shadow-2xs"
+                    >
+                      <div>
+                        <div className="font-bold text-slate-900 group-hover:text-emerald-800 transition">
+                          {s.desc}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                          Or {s.alt}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {s.keys.map((k) => (
+                          <kbd
+                            key={k}
+                            className="px-2 py-1 rounded-lg border border-slate-300 bg-slate-100 text-slate-800 font-mono text-[11px] font-bold shadow-xs group-hover:bg-white group-hover:border-emerald-300"
+                          >
+                            {k}
+                          </kbd>
+                        ))}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Category 2: Counter & Action Hotkeys */}
+              <div>
+                <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider mb-3 text-emerald-800">
+                  🎯 Counter & Register Actions
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {[
+                    { key: 'F2', desc: 'Focus Search / Barcode Gun in POS', badge: 'POS Screen' },
+                    { key: 'F4', desc: 'Open Camera Barcode Scanner', badge: 'Global' },
+                    { key: 'Ctrl + N', desc: 'Register New Product / Medicine', badge: 'Global' },
+                    { key: 'Ctrl + L', desc: 'Quick Lock Register Screen', badge: 'Security' },
+                    { key: 'Esc', desc: 'Close Active Modal / Clear Search', badge: 'General' },
+                    { key: '?', desc: 'Open this Keyboard Shortcuts Guide', badge: 'Help' },
+                  ].map((s) => (
+                    <div
+                      key={s.desc}
+                      className="p-3 rounded-xl border border-slate-200 bg-slate-50/60 flex items-center justify-between text-xs"
+                    >
+                      <div>
+                        <div className="font-bold text-slate-900">{s.desc}</div>
+                        <span className="text-[10px] text-emerald-700 font-semibold">{s.badge}</span>
+                      </div>
+                      <kbd className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-slate-800 font-mono text-[11px] font-bold shadow-xs">
+                        {s.key}
+                      </kbd>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Pro-Tip Box */}
+              <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 flex items-start gap-2.5">
+                <Sparkles className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                <div className="text-[11px] leading-relaxed">
+                  <span className="font-bold">Pharmacist Tip:</span> You can use <kbd className="font-mono font-bold bg-white px-1 rounded border border-emerald-300">Ctrl</kbd> or <kbd className="font-mono font-bold bg-white px-1 rounded border border-emerald-300">Alt</kbd> keys interchangeably. Barcode scanning guns function simultaneously without requiring any manual hotkey clicks.
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                onClick={() => setIsShortcutsModalOpen(false)}
+                className="px-5 py-2 rounded-xl bg-[#072418] hover:bg-[#0c3927] text-white font-bold text-xs shadow-md shadow-emerald-950/20 transition"
+              >
+                Close (Esc)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

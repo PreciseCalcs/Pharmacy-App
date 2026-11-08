@@ -45,7 +45,12 @@ export class PharmacySyncEngine {
       // 1. Load Inventory
       const savedMeds = localStorage.getItem(INVENTORY_STORAGE_KEY);
       if (savedMeds) {
-        this.medicines = JSON.parse(savedMeds);
+        const parsed = JSON.parse(savedMeds) as MedicineItem[];
+        // Merge in any newly added catalog items (e.g. personal care, condoms, general store) if not already present
+        const existingIds = new Set(parsed.map((m) => m.id));
+        const missingNewItems = INITIAL_ZAHID_MEDICINES.filter((m) => !existingIds.has(m.id));
+        this.medicines = missingNewItems.length > 0 ? [...parsed, ...missingNewItems] : parsed;
+        localStorage.setItem(INVENTORY_STORAGE_KEY, JSON.stringify(this.medicines));
       } else {
         this.medicines = [...INITIAL_ZAHID_MEDICINES];
         localStorage.setItem(INVENTORY_STORAGE_KEY, JSON.stringify(this.medicines));

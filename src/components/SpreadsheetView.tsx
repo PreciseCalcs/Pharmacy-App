@@ -11,9 +11,16 @@ import {
   AlertTriangle, 
   Check, 
   Camera, 
-  Filter,
-  RefreshCw,
-  Tag
+  Filter, 
+  RefreshCw, 
+  Tag,
+  Package,
+  Pill,
+  Heart,
+  Baby,
+  ShoppingBag,
+  Sparkles,
+  Image as ImageIcon
 } from 'lucide-react';
 import { DosageForm, MedicineCategory, MedicineItem } from '../types/pharmacy';
 import { formatPKR, getPieceRetailPrice, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
@@ -46,6 +53,7 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
   canEdit,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedDosageForm, setSelectedDosageForm] = useState<string>('All');
   const [stockFilter, setStockFilter] = useState<'all' | 'low' | 'expiring' | 'expired'>('all');
@@ -55,9 +63,51 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Department counts
+  const deptCounts = useMemo(() => {
+    return {
+      all: medicines.length,
+      pharmacy: medicines.filter((m) => !m.department || m.department === 'pharmacy').length,
+      personal_care: medicines.filter((m) => m.department === 'personal_care' || m.category === 'Personal Care & Sexual Wellness' || m.category === 'Feminine Hygiene & Care' || m.category === 'Personal Hygiene & Grooming').length,
+      mother_baby: medicines.filter((m) => m.department === 'mother_baby' || m.category === 'Baby & Mother Care').length,
+      general_store: medicines.filter((m) => m.department === 'general_store' || m.category === 'General Store & FMCG').length,
+      surgical: medicines.filter((m) => m.department === 'surgical' || m.category === 'Medical Devices & Surgical').length,
+    };
+  }, [medicines]);
+
   // Filtered dataset
   const filteredMedicines = useMemo(() => {
     return medicines.filter((m) => {
+      // 0. Department filter
+      if (selectedDepartment !== 'all') {
+        if (selectedDepartment === 'personal_care') {
+          const match = m.department === 'personal_care' || 
+            m.category === 'Personal Care & Sexual Wellness' || 
+            m.category === 'Feminine Hygiene & Care' || 
+            m.category === 'Personal Hygiene & Grooming';
+          if (!match) return false;
+        } else if (selectedDepartment === 'mother_baby') {
+          const match = m.department === 'mother_baby' || m.category === 'Baby & Mother Care';
+          if (!match) return false;
+        } else if (selectedDepartment === 'general_store') {
+          const match = m.department === 'general_store' || m.category === 'General Store & FMCG';
+          if (!match) return false;
+        } else if (selectedDepartment === 'surgical') {
+          const match = m.department === 'surgical' || m.category === 'Medical Devices & Surgical';
+          if (!match) return false;
+        } else if (selectedDepartment === 'pharmacy') {
+          const isOther = m.department === 'personal_care' || 
+            m.department === 'mother_baby' || 
+            m.department === 'general_store' || 
+            m.department === 'surgical' ||
+            m.category === 'Personal Care & Sexual Wellness' ||
+            m.category === 'Baby & Mother Care' ||
+            m.category === 'General Store & FMCG' ||
+            m.category === 'Medical Devices & Surgical';
+          if (isOther) return false;
+        }
+      }
+
       // 1. Search filter
       const q = searchTerm.toLowerCase().trim();
       if (q) {
@@ -67,7 +117,8 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
           m.barcode.includes(q) ||
           m.sku.toLowerCase().includes(q) ||
           m.shelfLocation.toLowerCase().includes(q) ||
-          m.batchNumber.toLowerCase().includes(q);
+          m.batchNumber.toLowerCase().includes(q) ||
+          (m.category && m.category.toLowerCase().includes(q));
         if (!matches) return false;
       }
 
@@ -84,7 +135,7 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
 
       return true;
     });
-  }, [medicines, searchTerm, selectedCategory, selectedDosageForm, stockFilter]);
+  }, [medicines, searchTerm, selectedDepartment, selectedCategory, selectedDosageForm, stockFilter]);
 
   // Inline cell edit handlers
   const handleStartEdit = (id: string, field: string, currentValue: any) => {
@@ -210,17 +261,51 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
             </>
           )}
 
-          {/* Add New Medicine */}
+          {/* Add New Product / Medicine */}
           {canEdit && (
             <button
               onClick={() => onOpenMedicineModal()}
-              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/30 transition"
+              className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-950/20 transition"
+              title="Register new medicine, personal care, or general store item (Ctrl+N)"
             >
               <Plus className="w-4 h-4" />
-              <span>Add Medicine</span>
+              <span>Add Product</span>
+              <kbd className="hidden sm:inline-block ml-1 px-1.5 py-0.5 rounded bg-emerald-900/60 text-[10px] text-emerald-200 font-mono">
+                Ctrl+N
+              </kbd>
             </button>
           )}
         </div>
+      </div>
+
+      {/* Department Tabs (Medicines, Personal Care / Condoms, Mother & Baby, General Store, Surgical) */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+        {[
+          { id: 'all', label: 'All Stock', count: deptCounts.all, icon: Package },
+          { id: 'pharmacy', label: 'Medicines', count: deptCounts.pharmacy, icon: Pill },
+          { id: 'personal_care', label: 'Personal Care & Condoms', count: deptCounts.personal_care, icon: Heart },
+          { id: 'mother_baby', label: 'Mother & Baby', count: deptCounts.mother_baby, icon: Baby },
+          { id: 'general_store', label: 'General Store & FMCG', count: deptCounts.general_store, icon: ShoppingBag },
+          { id: 'surgical', label: 'Devices & Surgical', count: deptCounts.surgical, icon: Sparkles },
+        ].map(({ id, label, count, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setSelectedDepartment(id)}
+            className={`px-3 py-2 rounded-xl font-bold flex items-center gap-1.5 transition whitespace-nowrap shadow-2xs ${
+              selectedDepartment === id
+                ? 'bg-[#083322] text-white shadow-emerald-950/20'
+                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Icon className="w-3.5 h-3.5" />
+            <span>{label}</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+              selectedDepartment === id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+            }`}>
+              {count}
+            </span>
+          </button>
+        ))}
       </div>
 
       {/* Filter and Search Bar */}
@@ -230,7 +315,7 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Search medicine brand, formula, barcode, SKU, or shelf..."
+            placeholder="Search brand, formula, condoms, general items, barcode, SKU, shelf..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-slate-50/50"
@@ -240,7 +325,7 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
         {/* Quick Filter Badges */}
         <div className="flex items-center gap-1.5 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 text-xs">
           {[
-            { id: 'all', label: 'All Stock' },
+            { id: 'all', label: 'All Status' },
             { id: 'low', label: 'Low Stock' },
             { id: 'expiring', label: 'Expiring Soon' },
             { id: 'expired', label: 'Expired' },
@@ -266,7 +351,8 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-slate-50 text-slate-600 font-bold uppercase tracking-wider border-b border-slate-200 text-[11px]">
-                <th className="py-3 px-3">Brand & Formula</th>
+                <th className="py-3 px-3 w-14 text-center">Photo</th>
+                <th className="py-3 px-3">Product Name & Formula</th>
                 <th className="py-3 px-3">Category</th>
                 <th className="py-3 px-3">Packs</th>
                 <th className="py-3 px-3">Loose</th>
@@ -282,8 +368,8 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
             <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
               {filteredMedicines.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-slate-400 font-sans">
-                    No medicines match the selected filter or query.
+                  <td colSpan={12} className="py-12 text-center text-slate-400 font-sans">
+                    No products match the selected filter or query.
                   </td>
                 </tr>
               ) : (
@@ -299,6 +385,32 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
                         isExp ? 'bg-rose-50/30' : isLow ? 'bg-amber-50/30' : ''
                       }`}
                     >
+                      {/* Photo Thumbnail */}
+                      <td className="py-2.5 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => onOpenMedicineModal(m)}
+                          className="w-9 h-9 rounded-lg overflow-hidden border border-slate-200 bg-slate-50 flex items-center justify-center hover:opacity-80 transition shadow-2xs group relative mx-auto"
+                          title="Click to view or upload product photo"
+                        >
+                          {m.imageUrl ? (
+                            <img src={m.imageUrl} alt={m.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="text-slate-400 group-hover:text-emerald-700">
+                              {m.category === 'Personal Care & Sexual Wellness' || m.department === 'personal_care' ? (
+                                <Heart className="w-4 h-4 text-rose-500" />
+                              ) : m.category === 'Baby & Mother Care' ? (
+                                <Baby className="w-4 h-4 text-amber-500" />
+                              ) : m.category === 'General Store & FMCG' ? (
+                                <ShoppingBag className="w-4 h-4 text-blue-500" />
+                              ) : (
+                                <Pill className="w-4 h-4 text-emerald-600" />
+                              )}
+                            </div>
+                          )}
+                        </button>
+                      </td>
+
                       {/* Name & Formula */}
                       <td className="py-2.5 px-3 font-sans">
                         <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">

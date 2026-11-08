@@ -16,7 +16,12 @@ import {
   Sparkles,
   Layers,
   ArrowRight,
-  Users
+  Users,
+  Heart,
+  Baby,
+  ShoppingBag,
+  Pill,
+  Image as ImageIcon
 } from 'lucide-react';
 import { 
   DosageForm, 
@@ -58,6 +63,7 @@ export const PosView: React.FC<PosViewProps> = ({
   onSaleCompleted,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [posDepartment, setPosDepartment] = useState<string>('all');
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [customerName, setCustomerName] = useState('Walk-in Customer');
   const [customerPhone, setCustomerPhone] = useState('');
@@ -72,17 +78,62 @@ export const PosView: React.FC<PosViewProps> = ({
   const activeCounter = syncEngine.getActiveCounter();
   const khataCustomers = syncEngine.getKhataCustomers();
 
+  // F2 focus shortcut for fast counter dispensing
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F2') {
+        e.preventDefault();
+        barcodeInputRef.current?.focus();
+        barcodeInputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   // Available medicines for fast catalog select
   const availableMedicines = medicines.filter((m) => {
-    const q = searchQuery.toLowerCase().trim();
     const totalPieces = getTotalPiecesInStock(m);
     if (totalPieces <= 0) return false;
+
+    // Department filtering
+    if (posDepartment !== 'all') {
+      if (posDepartment === 'personal_care') {
+        const match = m.department === 'personal_care' || 
+          m.category === 'Personal Care & Sexual Wellness' || 
+          m.category === 'Feminine Hygiene & Care' || 
+          m.category === 'Personal Hygiene & Grooming';
+        if (!match) return false;
+      } else if (posDepartment === 'mother_baby') {
+        const match = m.department === 'mother_baby' || m.category === 'Baby & Mother Care';
+        if (!match) return false;
+      } else if (posDepartment === 'general_store') {
+        const match = m.department === 'general_store' || m.category === 'General Store & FMCG';
+        if (!match) return false;
+      } else if (posDepartment === 'surgical') {
+        const match = m.department === 'surgical' || m.category === 'Medical Devices & Surgical';
+        if (!match) return false;
+      } else if (posDepartment === 'pharmacy') {
+        const isOther = m.department === 'personal_care' || 
+          m.department === 'mother_baby' || 
+          m.department === 'general_store' || 
+          m.department === 'surgical' ||
+          m.category === 'Personal Care & Sexual Wellness' ||
+          m.category === 'Baby & Mother Care' ||
+          m.category === 'General Store & FMCG' ||
+          m.category === 'Medical Devices & Surgical';
+        if (isOther) return false;
+      }
+    }
+
+    const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
     return (
       m.name.toLowerCase().includes(q) ||
       m.genericName.toLowerCase().includes(q) ||
       m.barcode.includes(q) ||
-      m.sku.toLowerCase().includes(q)
+      m.sku.toLowerCase().includes(q) ||
+      (m.category && m.category.toLowerCase().includes(q))
     );
   });
 
@@ -231,24 +282,53 @@ export const PosView: React.FC<PosViewProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
+              <span className="hidden sm:inline-block text-[11px] text-slate-400 font-mono">
+                Press <kbd className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-300 font-bold">F2</kbd> to search
+              </span>
               <button
                 type="button"
                 onClick={onOpenScanner}
                 className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition"
+                title="Camera Barcode Scanner (F4)"
               >
                 <Camera className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Camera Scanner</span>
+                <span>Scanner</span>
               </button>
             </div>
           </div>
 
+          {/* Department Filter Pills */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-2 mb-2 text-xs">
+            {[
+              { id: 'all', label: 'All Items' },
+              { id: 'pharmacy', label: 'Medicines' },
+              { id: 'personal_care', label: 'Condoms & Personal Care' },
+              { id: 'mother_baby', label: 'Mother & Baby' },
+              { id: 'general_store', label: 'General Store & FMCG' },
+              { id: 'surgical', label: 'Devices & Surgical' },
+            ].map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setPosDepartment(id)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition ${
+                  posDepartment === id
+                    ? 'bg-[#083322] text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {/* Quick Search / Hardware Gun Input */}
-          <div className="relative mb-4">
+          <div className="relative mb-3">
             <Search className="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               ref={barcodeInputRef}
               type="text"
-              placeholder="Scan Barcode gun or search medicine / formula / SKU..."
+              placeholder="Scan Barcode gun or search brand, formula, condoms, soap, baby items... (F2)"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs sm:text-sm bg-slate-50/50 focus:bg-white transition"
@@ -256,12 +336,12 @@ export const PosView: React.FC<PosViewProps> = ({
             />
           </div>
 
-          {/* Medicines Grid */}
+          {/* Products Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[560px] overflow-y-auto pr-1">
             {availableMedicines.length === 0 ? (
               <div className="col-span-2 py-12 text-center text-slate-400">
                 <AlertCircle className="w-8 h-8 mx-auto text-slate-300 mb-2" />
-                <p className="text-sm">No in-stock medicines match your search.</p>
+                <p className="text-sm">No items found matching the query or category.</p>
               </div>
             ) : (
               availableMedicines.map((med) => {
@@ -272,25 +352,46 @@ export const PosView: React.FC<PosViewProps> = ({
                 return (
                   <div
                     key={med.id}
-                    className="p-3.5 rounded-xl border border-slate-200 bg-white hover:border-emerald-300 hover:shadow-xs transition flex flex-col justify-between text-left group"
+                    className="p-3 rounded-xl border border-slate-200 bg-white hover:border-emerald-300 hover:shadow-xs transition flex flex-col justify-between text-left group"
                   >
                     <div>
-                      <div className="flex items-start justify-between gap-1.5">
-                        <div className="flex-1">
-                          <h4 className="font-bold text-slate-900 text-xs sm:text-sm group-hover:text-emerald-700 transition">
-                            {med.name}
-                          </h4>
-                          <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                      <div className="flex items-start gap-2.5">
+                        {/* Product Photo Thumbnail */}
+                        <div className="w-11 h-11 rounded-lg overflow-hidden border border-slate-200 bg-slate-50 shrink-0 flex items-center justify-center shadow-2xs">
+                          {med.imageUrl ? (
+                            <img src={med.imageUrl} alt={med.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="text-slate-400">
+                              {med.category === 'Personal Care & Sexual Wellness' || med.department === 'personal_care' ? (
+                                <Heart className="w-5 h-5 text-rose-500" />
+                              ) : med.category === 'Baby & Mother Care' ? (
+                                <Baby className="w-5 h-5 text-amber-500" />
+                              ) : med.category === 'General Store & FMCG' ? (
+                                <ShoppingBag className="w-5 h-5 text-blue-500" />
+                              ) : (
+                                <Pill className="w-5 h-5 text-emerald-600" />
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-1">
+                            <h4 className="font-bold text-slate-900 text-xs sm:text-sm group-hover:text-emerald-700 transition truncate">
+                              {med.name}
+                            </h4>
+                            <span className="font-black text-emerald-800 text-xs sm:text-sm whitespace-nowrap ml-1">
+                              {formatPKR(med.unitRetailPrice)}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono truncate">
                             {med.genericName} &bull; {med.strength}
                           </div>
                         </div>
-                        <span className="font-black text-emerald-800 text-xs sm:text-sm whitespace-nowrap">
-                          {formatPKR(med.unitRetailPrice)}
-                        </span>
                       </div>
 
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 mt-2 pt-2 border-t border-slate-100 font-mono">
-                        <span>Shelf: {med.shelfLocation}</span>
+                      <div className="flex items-center justify-between text-[10px] text-slate-400 mt-2 pt-2 border-t border-slate-100 font-mono">
+                        <span className="truncate max-w-[120px]">{med.category}</span>
                         <span className={med.currentStockPacks <= med.minThresholdPacks ? 'text-amber-600 font-bold' : 'text-slate-600'}>
                           {med.currentStockPacks} packs ({med.currentStockLoose || 0} loose)
                         </span>

@@ -11,7 +11,21 @@ export type DosageForm =
   | 'Sachet'
   | 'Patch'
   | 'Infusion'
+  | 'Pack'
+  | 'Piece'
+  | 'Bottle'
+  | 'Tube'
+  | 'Box'
+  | 'Roll'
+  | 'Kit'
   | 'Other';
+
+export type ProductDepartment = 
+  | 'pharmacy' 
+  | 'personal_care' 
+  | 'general_store' 
+  | 'mother_baby' 
+  | 'surgical';
 
 export type MedicineCategory = 
   | 'Antibiotics'
@@ -29,6 +43,12 @@ export type MedicineCategory =
   | 'Gynecology'
   | 'Ophthalmology'
   | 'ENT'
+  | 'Personal Care & Sexual Wellness'
+  | 'Feminine Hygiene & Care'
+  | 'Baby & Mother Care'
+  | 'Personal Hygiene & Grooming'
+  | 'General Store & FMCG'
+  | 'Medical Devices & Surgical'
   | 'General / Other';
 
 export type UserRole = 'owner' | 'pharmacist' | 'cashier';
@@ -51,6 +71,7 @@ export interface MedicineItem {
   barcode: string;
   sku: string;
   category: MedicineCategory;
+  department?: ProductDepartment;
   dosageForm: DosageForm;
   strength: string;
   unitsPerPack: number;
@@ -70,6 +91,7 @@ export interface MedicineItem {
   sideEffects?: string;
   precautions?: string;
   notes?: string;
+  imageUrl?: string; // Product photo URL / base64 image data
   created?: string;
   updated?: string;
 }
@@ -81,6 +103,7 @@ export interface MedicineRecord {
   sku: string;
   barcode: string;
   category: string;
+  department?: string;
   dosage_form: string;
   strength: string;
   units_per_pack?: number;
@@ -96,6 +119,7 @@ export interface MedicineRecord {
   manufacturer?: string;
   is_prescription_required: boolean;
   notes?: string;
+  image_url?: string;
   created?: string;
   updated?: string;
 }
