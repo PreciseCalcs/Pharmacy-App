@@ -244,11 +244,31 @@ export default function App() {
         const key = e.key.toLowerCase();
         if (key === 'p') { e.preventDefault(); setActiveTab('pos'); soundService.click(); showToast('⚡ Point of Sale (Alt+P)', 'success'); return; }
         if (key === 'i') { e.preventDefault(); setActiveTab('inventory'); soundService.click(); showToast('⚡ Stock (Alt+I)', 'success'); return; }
-        if (key === 's') { e.preventDefault(); setActiveTab('settings'); soundService.click(); showToast('⚡ Settings (Alt+S)', 'success'); return; }
+        if (key === 's') {
+          e.preventDefault();
+          handleNavigateTab('settings', '⚡ Pharmacy Settings (Ctrl+S)');
+          return;
+        }
         if (key === 'o') { e.preventDefault(); setActiveTab('overview'); soundService.click(); showToast('⚡ Overview (Alt+O)', 'success'); return; }
         if (key === 'k') { e.preventDefault(); setActiveTab('khata'); soundService.click(); showToast('⚡ Khata (Alt+K)', 'success'); return; }
-        if (key === 'r') { e.preventDefault(); setActiveTab('reports'); soundService.click(); showToast('⚡ Reports (Alt+R)', 'success'); return; }
-        if (key === 'n') { e.preventDefault(); setSelectedMedicineForEdit(null); setIsMedicineModalOpen(true); soundService.click(); return; }
+        if (key === 'r') {
+          e.preventDefault();
+          handleNavigateTab('reports', '⚡ Sales & Financial Reports (Ctrl+R)');
+          return;
+        }
+        if (key === 'n') {
+          e.preventDefault();
+          if (!can(currentUser.role, 'canEditInventory')) {
+            soundService.errorTone();
+            showToast('Access denied: Only Owner or Pharmacist can register products', 'warn');
+            return;
+          }
+          setSelectedMedicineForEdit(null);
+          setIsMedicineModalOpen(true);
+          soundService.click();
+          showToast('⚡ Register Product Item (Ctrl+N)', 'success');
+          return;
+        }
         if (key === 'l') { e.preventDefault(); handleLock(); return; }
       }
 
