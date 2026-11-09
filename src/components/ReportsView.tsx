@@ -18,6 +18,7 @@ import { formatPKR } from '../utils/pharmacyHelpers';
 import { generateSalesReportPDF } from '../services/pdfGenerator';
 import { exportSalesToExcel } from '../services/excelExporter';
 import { soundService } from '../services/soundAlerts';
+import { SalesHeatmap } from './SalesHeatmap';
 
 interface ReportsViewProps {
   sales: SaleTransaction[];
@@ -43,6 +44,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   canProcessRefund,
 }) => {
   const [dateFilter, setDateFilter] = useState<'today' | '7days' | 'month' | 'all'>('7days');
+  const [selectedHeatmapDate, setSelectedHeatmapDate] = useState<string | null>(null);
   const [paymentFilter, setPaymentFilter] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<'all' | 'completed' | 'refunded'>('all');
   const [searchInvoice, setSearchInvoice] = useState('');
@@ -57,18 +59,28 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
   const filteredSales = useMemo(() => {
     return sales.filter((txn) => {
-      // Date filter
-      if (dateFilter === 'today' && !isToday(txn.createdAt)) return false;
-      if (dateFilter === '7days') {
+      // Specific calendar day selected from Sales Heatmap
+      if (selectedHeatmapDate) {
         const d = new Date(txn.createdAt);
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-        if (d < sevenDaysAgo) return false;
-      }
-      if (dateFilter === 'month') {
-        const d = new Date(txn.createdAt);
-        const now = new Date();
-        if (d.getMonth() !== now.getMonth() || d.getFullYear() !== now.getFullYear()) return false;
+        if (isNaN(d.getTime())) return false;
+        const localKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+          d.getDate()
+        ).padStart(2, '0')}`;
+        if (localKey !== selectedHeatmapDate) return false;
+      } else {
+        // Preset Date filter
+        if (dateFilter === 'today' && !isToday(txn.createdAt)) return false;
+        if (dateFilter === '7days') {
+          const d = new Date(txn.createdAt);
+          const sevenDaysAgo = new Date();
+          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+          if (d < sevenDaysAgo) return false;
+        }
+        if (dateFilter === 'month') {
+          const d = new Date(txn.createdAt);
+          const now = new Date();
+          if (d.getMonth() !== now.getMonth() || d.getFullYear() !== now.getFullYear()) return false;
+        }
       }
 
       // Payment method filter
@@ -90,7 +102,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
       return true;
     });
-  }, [sales, dateFilter, paymentFilter, statusFilter, searchInvoice]);
+  }, [sales, dateFilter, selectedHeatmapDate, paymentFilter, statusFilter, searchInvoice]);
 
   // Aggregated totals (calculated from active/completed sales so refunded invoices don't inflate revenue)
   const completedSales = useMemo(
@@ -269,6 +281,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
         </div>
       </div>
 
+      {/* Daily Sales Revenue Calendar Heatmap */}
+      <SalesHeatmap
+        sales={sales}
+        canViewProfits={canViewProfits}
+        selectedDateKey={selectedHeatmapDate}
+        onSelectDateKey={setSelectedHeatmapDate}
+      />
+
       {/* Filter Toolbar */}
       <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs flex flex-col lg:flex-row items-center justify-between gap-3 text-xs">
         {/* Date & Status Presets */}
@@ -282,9 +302,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             ].map((item) => (
               <button
                 key={item.id}
-                onClick={() => setDateFilter(item.id as any)}
+                onClick={() => {
+                  setSelectedHeatmapDate(null);
+                  setDateFilter(item.id as any);
+                }}
                 className={`px-3 py-1.5 rounded-lg font-semibold whitespace-nowrap transition ${
-                  dateFilter === item.id
+                  !selectedHeatmapDate && dateFilter === item.id
                     ? 'bg-slate-900 text-white'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
