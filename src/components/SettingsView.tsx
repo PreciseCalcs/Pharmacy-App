@@ -181,7 +181,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setEditingUserId(u.id);
     setEditName(u.name);
     setEditRole(u.role);
-    setEditPin(u.pin);
+    setEditPin(''); // Keep blank so hashed PIN is never exposed; only updates if new PIN is typed
     setEditPhone(u.phone || '');
   };
 
