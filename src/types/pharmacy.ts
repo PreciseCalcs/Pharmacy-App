@@ -203,6 +203,9 @@ export interface SaleTransaction {
   receivedAmount: number;
   changeAmount: number;
   status: 'completed' | 'refunded';
+  refundedAt?: string;
+  refundedBy?: string;
+  refundReason?: string;
   notes?: string;
   createdAt: string;
 }
@@ -247,7 +250,7 @@ export interface PharmacyCounter {
 
 export interface KhataEntry {
   id: string;
-  type: 'sale' | 'payment';
+  type: 'sale' | 'payment' | 'refund';
   invoiceNumber?: string;
   description: string;
   amount: number;

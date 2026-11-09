@@ -79,6 +79,13 @@ export function generateReceiptHtml(
       </div>
 
       <div style="border-bottom: 1px dashed #64748b; padding-bottom: 5px; margin-bottom: 6px; font-size: 0.95em;">
+        ${
+          txn.status === 'refunded'
+            ? `<div style="background: #ffe4e6; color: #9f1239; border: 1px solid #f43f5e; font-weight: 800; text-align: center; padding: 3px 6px; margin-bottom: 5px; border-radius: 4px;">
+                REFUNDED / RETURNED${txn.refundReason ? ` (${escapeHtml(txn.refundReason)})` : ''}
+              </div>`
+            : ''
+        }
         <div style="display: flex; justify-content: space-between;">
           <span><strong>Invoice #:</strong> ${escapeHtml(txn.invoiceNumber)}</span>
           <span>${escapeHtml(formatDateTime(txn.createdAt))}</span>

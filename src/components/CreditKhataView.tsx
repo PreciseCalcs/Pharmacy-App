@@ -342,7 +342,7 @@ export const CreditKhataView: React.FC<CreditKhataViewProps> = ({
                   </div>
                 ) : (
                   selectedCustomer.history.map((entry) => {
-                    const isPayment = entry.type === 'payment';
+                    const isPayment = entry.type === 'payment' || entry.type === 'refund';
 
                     return (
                       <div

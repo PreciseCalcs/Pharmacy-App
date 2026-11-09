@@ -50,10 +50,12 @@ export function generateSalesReportPDF(
   doc.setFontSize(9);
   doc.text(`Generated: ${new Date().toLocaleString()}`, pageWidth - 14, y, { align: 'right' });
 
-  // Summary Metrics
-  const totalRevenue = transactions.reduce((acc, t) => acc + t.totalAmount, 0);
-  const totalProfit = transactions.reduce((acc, t) => acc + (t.totalProfit || 0), 0);
-  const totalItemsSold = transactions.reduce(
+  // Summary Metrics (calculated from active non-refunded sales)
+  const activeTransactions = transactions.filter((t) => t.status !== 'refunded');
+  const refundedCount = transactions.length - activeTransactions.length;
+  const totalRevenue = activeTransactions.reduce((acc, t) => acc + t.totalAmount, 0);
+  const totalProfit = activeTransactions.reduce((acc, t) => acc + (t.totalProfit || 0), 0);
+  const totalItemsSold = activeTransactions.reduce(
     (acc, t) => acc + t.items.reduce((s, i) => s + i.quantity, 0),
     0
   );
@@ -64,9 +66,13 @@ export function generateSalesReportPDF(
 
   doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
-  doc.text(`Total Orders: ${transactions.length}`, 18, y + 6);
+  doc.text(
+    `Active Orders: ${activeTransactions.length}${refundedCount > 0 ? ` (${refundedCount} Refunded)` : ''}`,
+    18,
+    y + 6
+  );
   doc.text(`Units Dispensed: ${totalItemsSold}`, 65, y + 6);
-  doc.text(`Total Gross Revenue: ${formatPKR(totalRevenue)}`, 115, y + 6);
+  doc.text(`Net Gross Revenue: ${formatPKR(totalRevenue)}`, 115, y + 6);
   doc.text(`Net Estimated Profit: ${formatPKR(totalProfit)}`, 18, y + 12);
   const margin = totalRevenue > 0 ? ((totalProfit / totalRevenue) * 100).toFixed(1) : '0';
   doc.text(`Average Margin: ${margin}%`, 115, y + 12);
@@ -79,9 +85,9 @@ export function generateSalesReportPDF(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
     doc.text('Invoice #', 16, yPos + 5);
-    doc.text('Date & Time', 45, yPos + 5);
-    doc.text('Customer', 85, yPos + 5);
-    doc.text('Payment', 125, yPos + 5);
+    doc.text('Date & Time', 48, yPos + 5);
+    doc.text('Customer', 88, yPos + 5);
+    doc.text('Payment', 126, yPos + 5);
     doc.text('Items', 150, yPos + 5);
     doc.text('Amount (PKR)', pageWidth - 16, yPos + 5, { align: 'right' });
   };
@@ -101,14 +107,18 @@ export function generateSalesReportPDF(
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
     }
-    doc.text(txn.invoiceNumber, 16, y);
-    doc.text(formatDateTime(txn.createdAt), 45, y);
-    doc.text((txn.customerName || 'Walk-in').slice(0, 20), 85, y);
-    doc.text(txn.paymentMethod, 125, y);
+    const isRef = txn.status === 'refunded';
+    doc.text(isRef ? `${txn.invoiceNumber} [REF]` : txn.invoiceNumber, 16, y);
+    doc.text(formatDateTime(txn.createdAt), 48, y);
+    doc.text((txn.customerName || 'Walk-in').slice(0, 18), 88, y);
+    doc.text(txn.paymentMethod, 126, y);
     doc.text(String(txn.items.length), 153, y);
-    doc.text(`Rs. ${txn.totalAmount.toLocaleString('en-PK')}`, pageWidth - 16, y, {
-      align: 'right',
-    });
+    doc.text(
+      `${isRef ? 'REFUNDED ' : ''}Rs. ${txn.totalAmount.toLocaleString('en-PK')}`,
+      pageWidth - 16,
+      y,
+      { align: 'right' }
+    );
     y += 6;
   });
 

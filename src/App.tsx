@@ -909,7 +909,13 @@ export default function App() {
                 setSelectedInvoice(txn);
                 setIsInvoiceModalOpen(true);
               }}
+              onRefundSale={(txnId, reason) =>
+                syncEngine.refundSale(txnId, currentUser.name, reason)
+              }
               canViewProfits={currentUser.role === 'owner'}
+              canProcessRefund={
+                currentUser.role === 'owner' || currentUser.role === 'pharmacist'
+              }
             />
           )}
 

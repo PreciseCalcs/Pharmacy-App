@@ -50,6 +50,7 @@ export function exportSalesToExcel(sales: SaleTransaction[]): void {
     txn.items.forEach((item) => {
       flattened.push({
         'Invoice #': txn.invoiceNumber,
+        'Status': txn.status === 'refunded' ? 'REFUNDED' : 'COMPLETED',
         'Date & Time': formatDateTime(txn.createdAt),
         'Customer Name': txn.customerName,
         'Customer Phone': txn.customerPhone || '',
@@ -65,6 +66,8 @@ export function exportSalesToExcel(sales: SaleTransaction[]): void {
         'Invoice Subtotal (PKR)': txn.subtotal,
         'Discount (PKR)': txn.discountAmount,
         'Net Invoice Total (PKR)': txn.totalAmount,
+        'Refund Reason': txn.refundReason || '',
+        'Refunded By': txn.refundedBy || '',
       });
     });
   });

@@ -287,6 +287,24 @@
         "options": { "max": 40 }
       },
       {
+        "name": "refundedAt",
+        "type": "text",
+        "required": false,
+        "options": { "max": 60 }
+      },
+      {
+        "name": "refundedBy",
+        "type": "text",
+        "required": false,
+        "options": { "max": 120 }
+      },
+      {
+        "name": "refundReason",
+        "type": "text",
+        "required": false,
+        "options": { "max": 250 }
+      },
+      {
         "name": "notes",
         "type": "text",
         "required": false

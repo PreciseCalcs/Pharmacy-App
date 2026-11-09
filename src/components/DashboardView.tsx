@@ -53,8 +53,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 }) => {
   const activeCounter = syncEngine.getActiveCounter();
 
-  // Metrics calculation
-  const todaySales = sales.filter((s) => isToday(s.createdAt));
+  // Metrics calculation (exclude refunded sales from active revenue)
+  const completedSales = useMemo(
+    () => sales.filter((s) => s.status !== 'refunded'),
+    [sales]
+  );
+  const todaySales = completedSales.filter((s) => isToday(s.createdAt));
   const todayRevenue = todaySales.reduce((acc, s) => acc + s.totalAmount, 0);
 
   const totalKhataBalance = syncEngine.getTotalOutstandingKhata();
@@ -151,8 +155,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
       const dayMonth = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
 
-      // Find real sales matching this local calendar day
-      const daySales = sales.filter((s) => {
+      // Find real completed sales matching this local calendar day
+      const daySales = completedSales.filter((s) => {
         try {
           const parsed = new Date(s.createdAt);
           if (isNaN(parsed.getTime())) return false;
@@ -174,7 +178,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }
 
     return days;
-  }, [sales]);
+  }, [completedSales]);
 
   const total7DayRevenue = useMemo(() => {
     return last7DaysData.reduce((acc, d) => acc + d.revenue, 0);
@@ -186,9 +190,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return last7DaysData.reduce((max, d) => (d.revenue > max.revenue ? d : max), last7DaysData[0]);
   }, [last7DaysData]);
 
-  // Most dispensed calculation (100% real recorded sales)
+  // Most dispensed calculation (100% real recorded completed sales)
   const medicineDispenseCounts: Record<string, { name: string; quantity: number }> = {};
-  sales.forEach((s) => {
+  completedSales.forEach((s) => {
     s.items.forEach((item) => {
       if (!medicineDispenseCounts[item.medicineId]) {
         medicineDispenseCounts[item.medicineId] = { name: item.medicineName, quantity: 0 };
@@ -455,31 +459,43 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   </td>
                 </tr>
               ) : (
-                recentTransactions.map((txn) => (
-                  <tr key={txn.id} className="hover:bg-slate-50/50">
-                    <td className="py-3 px-3 font-mono font-bold text-slate-900">
-                      {txn.invoiceNumber}
-                    </td>
-                    <td className="py-3 px-3 text-slate-800 font-medium">
-                      {txn.customerName}
-                    </td>
-                    <td className="py-3 px-3 text-slate-600">
-                      {txn.counterName || activeCounter}
-                    </td>
-                    <td className="py-3 px-3">
-                      {txn.paymentMethod === 'Credit' ? (
-                        <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium text-[10px]">
-                          Credit
-                        </span>
-                      ) : (
-                        <span className="text-slate-600">{txn.paymentMethod}</span>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 text-right font-mono font-bold text-slate-900">
-                      Rs {txn.totalAmount.toLocaleString()}
-                    </td>
-                  </tr>
-                ))
+                recentTransactions.map((txn) => {
+                  const isRefunded = txn.status === 'refunded';
+                  return (
+                    <tr key={txn.id} className="hover:bg-slate-50/50">
+                      <td className="py-3 px-3 font-mono font-bold text-slate-900">
+                        <span>{txn.invoiceNumber}</span>
+                        {isRefunded && (
+                          <span className="ml-2 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-sans font-bold text-[10px]">
+                            Refunded
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-3 text-slate-800 font-medium">
+                        {txn.customerName}
+                      </td>
+                      <td className="py-3 px-3 text-slate-600">
+                        {txn.counterName || activeCounter}
+                      </td>
+                      <td className="py-3 px-3">
+                        {txn.paymentMethod === 'Credit' ? (
+                          <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium text-[10px]">
+                            Credit
+                          </span>
+                        ) : (
+                          <span className="text-slate-600">{txn.paymentMethod}</span>
+                        )}
+                      </td>
+                      <td
+                        className={`py-3 px-3 text-right font-mono font-bold ${
+                          isRefunded ? 'text-slate-400 line-through' : 'text-slate-900'
+                        }`}
+                      >
+                        Rs {txn.totalAmount.toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

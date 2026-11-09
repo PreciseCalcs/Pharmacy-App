@@ -833,6 +833,147 @@ export class PharmacySyncEngine {
   }
 
   /**
+   * Processes a sale return / refund:
+   * 1. Marks the sale transaction as 'refunded' with staff name, reason, and timestamp.
+   * 2. Restores returned pack and loose quantities back into inventory (consolidating loose pieces into packs if applicable).
+   * 3. If the sale was paid via 'Credit', reduces the customer's Khata balanceDue and logs a 'refund' history entry.
+   */
+  public async refundSale(
+    transactionId: string,
+    staffName: string,
+    reason?: string
+  ): Promise<SaleTransaction> {
+    const txnIndex = this.sales.findIndex((s) => s.id === transactionId);
+    if (txnIndex === -1) {
+      throw new Error('Sale transaction not found.');
+    }
+
+    const txn = this.sales[txnIndex];
+    if (txn.status === 'refunded') {
+      throw new Error(`Invoice ${txn.invoiceNumber} has already been refunded.`);
+    }
+
+    const nowIso = new Date().toISOString();
+    const cleanReason = reason?.trim() || 'Customer return';
+
+    // 1. Restore inventory stock for each returned item
+    for (const item of txn.items) {
+      const med = this.medicines.find((m) => m.id === item.medicineId);
+      if (!med) continue;
+
+      const unitsPerPack =
+        med.unitsPerPack > 0 ? med.unitsPerPack : item.unitsPerPack > 0 ? item.unitsPerPack : 1;
+
+      if (item.unitType === 'pack') {
+        med.currentStockPacks += item.quantity;
+      } else {
+        const totalLoose = (med.currentStockLoose || 0) + item.quantity;
+        if (unitsPerPack > 1 && totalLoose >= unitsPerPack) {
+          const wholePacksRestored = Math.floor(totalLoose / unitsPerPack);
+          med.currentStockPacks += wholePacksRestored;
+          med.currentStockLoose = totalLoose % unitsPerPack;
+        } else if (unitsPerPack <= 1) {
+          med.currentStockPacks += item.quantity;
+          med.currentStockLoose = 0;
+        } else {
+          med.currentStockLoose = totalLoose;
+        }
+      }
+
+      // Reset reorder status if restored stock now exceeds safety threshold
+      if (
+        med.currentStockPacks > (med.minThresholdPacks || 5) &&
+        med.reorderStatus === 'ordered'
+      ) {
+        med.reorderStatus = 'needed';
+        med.orderedAt = undefined;
+      }
+
+      med.updated = nowIso;
+      this.enqueueOutbox('UPDATE_MEDICINE', {
+        id: med.id,
+        updates: {
+          currentStockPacks: med.currentStockPacks,
+          currentStockLoose: med.currentStockLoose,
+          reorderStatus: med.reorderStatus,
+          orderedAt: med.orderedAt,
+        },
+        fullItem: { ...med },
+      });
+    }
+
+    // 2. If Credit sale, adjust customer's Khata balance and record a refund entry
+    let updatedCustomer: CustomerKhata | undefined;
+    if (txn.paymentMethod === 'Credit') {
+      if (txn.customerId) {
+        updatedCustomer = this.khataCustomers.find((c) => c.id === txn.customerId);
+      }
+      if (!updatedCustomer && txn.customerPhone) {
+        updatedCustomer = this.khataCustomers.find(
+          (c) =>
+            c.phone.replace(/\s+/g, '') === txn.customerPhone!.replace(/\s+/g, '')
+        );
+      }
+      if (!updatedCustomer && txn.customerName) {
+        updatedCustomer = this.khataCustomers.find(
+          (c) => c.name.toLowerCase() === txn.customerName.trim().toLowerCase()
+        );
+      }
+
+      if (updatedCustomer) {
+        updatedCustomer.balanceDue = Math.max(0, updatedCustomer.balanceDue - txn.totalAmount);
+        updatedCustomer.updatedAt = nowIso;
+        updatedCustomer.history.unshift({
+          id: `ent_ref_${Date.now()}`,
+          type: 'refund',
+          invoiceNumber: txn.invoiceNumber,
+          description: `Sale Refund · ${txn.invoiceNumber} (${cleanReason})`,
+          amount: txn.totalAmount,
+          paymentMethod: 'Credit Refund',
+          date: nowIso,
+          note: cleanReason,
+        });
+        this.saveKhata();
+        this.enqueueOutbox('RECORD_KHATA_PAYMENT', {
+          customerId: updatedCustomer.id,
+          customer: { ...updatedCustomer },
+        });
+      }
+    }
+
+    // 3. Mark transaction as refunded
+    const refundedTxn: SaleTransaction = {
+      ...txn,
+      status: 'refunded',
+      refundedAt: nowIso,
+      refundedBy: staffName,
+      refundReason: cleanReason,
+    };
+
+    this.sales[txnIndex] = refundedTxn;
+    this.saveMedicines();
+    this.saveSales();
+    this.enqueueOutbox('REFUND_SALE', refundedTxn);
+    this.notify();
+
+    // 4. Attempt immediate PocketBase sync
+    try {
+      await this.upsertPbRecord('sales', refundedTxn.id, refundedTxn);
+      for (const item of refundedTxn.items) {
+        const med = this.medicines.find((m) => m.id === item.medicineId);
+        if (med) {
+          await this.upsertPbRecord('medicines', med.id, med);
+        }
+      }
+      if (updatedCustomer) {
+        await this.upsertPbRecord('customers_khata', updatedCustomer.id, updatedCustomer);
+      }
+    } catch {}
+
+    return refundedTxn;
+  }
+
+  /**
    * Normalizes any local string ID into a deterministic 15-character lowercase alphanumeric ID
    * required by PocketBase's primary key constraint (`[a-z0-9]{15}`).
    */
@@ -890,10 +1031,11 @@ export class PharmacySyncEngine {
     for (const item of this.outbox) {
       try {
         switch (item.action) {
-          case 'PROCESS_SALE': {
+          case 'PROCESS_SALE':
+          case 'REFUND_SALE': {
             const sale = item.payload as SaleTransaction;
             await this.upsertPbRecord('sales', sale.id, sale as Record<string, any>);
-            // Also ensure updated stock levels for sold items are synced to PocketBase
+            // Also ensure updated stock levels for sold/returned items are synced to PocketBase
             if (Array.isArray(sale.items)) {
               for (const soldItem of sale.items) {
                 const currentMed = this.medicines.find((m) => m.id === soldItem.medicineId);
