@@ -402,3 +402,53 @@ export interface ConnectionStatus {
   pendingSyncCount: number;
   errorMessage?: string;
 }
+
+export type ExpenseFrequency = 'daily' | 'monthly';
+
+export type DailyExpenseCategory =
+  | 'Shop Guests & Refreshments (Tea/Water)'
+  | 'Generator Fuel / Petrol'
+  | 'Packaging / Shoppers & Thermal Rolls'
+  | 'Freight / Loading & Rickshaw'
+  | 'Store Cleaning & Maintenance'
+  | 'Misc Daily Counter Expense';
+
+export type MonthlyExpenseCategory =
+  | 'Shop Rent'
+  | 'Electricity Bill (MEPCO)'
+  | 'Staff Salaries & Wages'
+  | 'Internet / Software / Phone Bill'
+  | 'Drug Licence / Tax & Legal'
+  | 'Misc Monthly Fixed Cost';
+
+export interface ExpenseRecord {
+  id: string;
+  monthKey: string; // Format: 'YYYY-MM' (e.g. '2026-11')
+  date: string; // ISO date or YYYY-MM-DD
+  frequency: ExpenseFrequency;
+  category: DailyExpenseCategory | MonthlyExpenseCategory | string;
+  title: string;
+  amount: number;
+  paidBy: string;
+  paymentMethod: 'Cash' | 'EasyPaisa' | 'JazzCash' | 'Bank Transfer';
+  note?: string;
+  createdAt: string;
+}
+
+export interface MonthlyAuditSnapshot {
+  monthKey: string; // 'YYYY-MM' (e.g. '2026-11')
+  monthLabel: string; // e.g. 'November 2026'
+  totalSalesCount: number;
+  grossRevenue: number;
+  grossSalesProfit: number; // Taken directly from POS sales profit
+  totalDiscountsGiven: number;
+  dailyExpensesTotal: number;
+  monthlyExpensesTotal: number;
+  totalExpenses: number;
+  netTakeHomeProfit: number; // grossSalesProfit - totalExpenses
+  profitMarginPercent: number;
+  isClosed: boolean; // True when owner locks/archives the month
+  closedAt?: string;
+  notes?: string;
+}
+

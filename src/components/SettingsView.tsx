@@ -16,7 +16,11 @@ import {
   AlertCircle,
   Shield,
   KeyRound,
-  Edit2
+  Edit2,
+  Download,
+  DatabaseBackup,
+  RotateCcw,
+  FileJson
 } from 'lucide-react';
 import { PharmacyCounter, PharmacyDetails, UserAccount, UserRole } from '../types/pharmacy';
 import { syncEngine } from '../services/syncEngine';
@@ -73,8 +77,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // Logo file input
   const logoInputRef = useRef<HTMLInputElement>(null);
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
+
+  // Disaster Recovery Backup & Restore state
+  const [backupNotice, setBackupNotice] = useState<{
+    type: 'success' | 'error';
+    title: string;
+    detail: string;
+  } | null>(null);
+  const [confirmResetDefaults, setConfirmResetDefaults] = useState(false);
+  const [dbStats, setDbStats] = useState(() => ({
+    medicines: syncEngine.getMedicines().length,
+    sales: syncEngine.getSales().length,
+    khata: syncEngine.getKhataCustomers().length,
+    staff: staffAuth.getStaffList().length,
+  }));
+
+  const refreshDbStats = () => {
+    setDbStats({
+      medicines: syncEngine.getMedicines().length,
+      sales: syncEngine.getSales().length,
+      khata: syncEngine.getKhataCustomers().length,
+      staff: staffAuth.getStaffList().length,
+    });
+  };
 
   // Owner PIN check if not logged in as owner
   const handleVerifyOwner = (e: React.FormEvent) => {
@@ -261,6 +289,114 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     } finally {
       setIsSaving(false);
     }
+  };
+
+  // One-Click JSON Backup Export
+  const handleExportBackup = () => {
+    try {
+      const snapshot = syncEngine.createBackupSnapshot();
+      const jsonString = JSON.stringify(snapshot, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+
+      const dateStamp = new Date().toISOString().slice(0, 10);
+      const safeStoreSlug = (details.name || 'Zahid_Medical_Store')
+        .replace(/[^a-zA-Z0-9]+/g, '_')
+        .replace(/^_|_$/g, '');
+      const filename = `${safeStoreSlug}_Backup_${dateStamp}.json`;
+
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      soundService.cashRegister();
+      refreshDbStats();
+      setBackupNotice({
+        type: 'success',
+        title: `Full backup downloaded (${filename})`,
+        detail: `Exported ${snapshot.medicines.length} medicines, ${snapshot.sales.length} sales receipts, ${snapshot.khataCustomers.length} Khata accounts, and ${snapshot.staffAccounts.length} staff profiles.`,
+      });
+    } catch (err) {
+      soundService.errorTone();
+      setBackupNotice({
+        type: 'error',
+        title: 'Backup export failed',
+        detail: err instanceof Error ? err.message : 'Could not serialize local pharmacy database.',
+      });
+    }
+  };
+
+  // One-Click JSON Backup Restore
+  const handleRestoreFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      try {
+        const rawText = String(loadEvent.target?.result || '');
+        const result = syncEngine.restoreFromBackup(rawText);
+
+        const restoredDetails = syncEngine.getPharmacyDetails();
+        setDetails(restoredDetails);
+        setPbAddress(restoredDetails.pocketBaseUrl || 'http://127.0.0.1:8090');
+        setCounters(syncEngine.getCounters());
+        setActiveCounter(syncEngine.getActiveCounter());
+        setStaffList(staffAuth.getStaffList());
+        refreshDbStats();
+
+        onSettingsSaved(restoredDetails);
+        onStaffListUpdated();
+        soundService.cashRegister();
+
+        const exportedLabel = result.exportedAt
+          ? ` (snapshot from ${new Date(result.exportedAt).toLocaleString('en-PK')})`
+          : '';
+        setBackupNotice({
+          type: 'success',
+          title: `Database restored successfully${exportedLabel}`,
+          detail: `Restored ${result.medicinesCount} medicines, ${result.salesCount} sales receipts, ${result.khataCount} Khata accounts, ${result.countersCount} counters, and ${result.staffCount} staff profiles.`,
+        });
+      } catch (err) {
+        soundService.errorTone();
+        setBackupNotice({
+          type: 'error',
+          title: 'Failed to restore backup file',
+          detail:
+            err instanceof Error
+              ? err.message
+              : 'The selected file is not a valid Zahid Medicine Store JSON backup.',
+        });
+      } finally {
+        if (backupFileInputRef.current) {
+          backupFileInputRef.current.value = '';
+        }
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleFactoryReset = () => {
+    syncEngine.resetToDefaults();
+    const freshDetails = syncEngine.getPharmacyDetails();
+    setDetails(freshDetails);
+    setPbAddress(freshDetails.pocketBaseUrl || 'http://127.0.0.1:8090');
+    setCounters(syncEngine.getCounters());
+    setActiveCounter(syncEngine.getActiveCounter());
+    setStaffList(staffAuth.getStaffList());
+    setConfirmResetDefaults(false);
+    refreshDbStats();
+    onSettingsSaved(freshDetails);
+    soundService.click();
+    setBackupNotice({
+      type: 'success',
+      title: 'Reset to default pharmacy catalog completed',
+      detail: `Restored ${syncEngine.getMedicines().length} default medicines and cleared local transaction history.`,
+    });
   };
 
  // If locked, render Owner PIN challenge
@@ -894,6 +1030,164 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             This preview currently saves its sample data and edits only in this browser. Shared logins, database synchronization, and logo storage require the matching PocketBase collections, authentication, and access rules on your server.
           </p>
         </div>
+      </div>
+
+      {/* SECTION 6: Disaster Recovery — One-Click JSON Backup & Restore */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+          <div className="flex items-start gap-3.5">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+              <DatabaseBackup className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-slate-900">
+                  Disaster recovery · One-click JSON backup &amp; restore
+                </h2>
+                <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-bold text-[10px] uppercase tracking-wider">
+                  Offline Safe
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Export your entire local pharmacy database (inventory, sales, refunds, Khata ledger, counters &amp; staff PINs) into a single portable <code className="font-mono text-slate-700">.json</code> file for daily safe-keeping or moving to a new computer.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Live Local Database Snapshot Summary */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Medicines &amp; Stock
+            </div>
+            <div className="text-lg font-extrabold text-slate-900 mt-0.5 font-mono">
+              {dbStats.medicines}
+            </div>
+            <div className="text-[11px] text-slate-400">Active catalog items</div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Sales &amp; Refunds
+            </div>
+            <div className="text-lg font-extrabold text-slate-900 mt-0.5 font-mono">
+              {dbStats.sales}
+            </div>
+            <div className="text-[11px] text-slate-400">Recorded invoices</div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Customer Khata
+            </div>
+            <div className="text-lg font-extrabold text-slate-900 mt-0.5 font-mono">
+              {dbStats.khata}
+            </div>
+            <div className="text-[11px] text-slate-400">Credit ledger accounts</div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Staff &amp; Counters
+            </div>
+            <div className="text-lg font-extrabold text-slate-900 mt-0.5 font-mono">
+              {dbStats.staff} / {counters.length}
+            </div>
+            <div className="text-[11px] text-slate-400">Users &amp; POS terminals</div>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={handleExportBackup}
+              className="px-4 py-2.5 rounded-xl bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-xs shadow-sm transition flex items-center gap-2 cursor-pointer"
+            >
+              <Download className="w-4 h-4 text-emerald-300" />
+              <span>Download Full JSON Backup</span>
+            </button>
+
+            <input
+              ref={backupFileInputRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={handleRestoreFileChange}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => backupFileInputRef.current?.click()}
+              className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 font-bold text-xs shadow-2xs transition flex items-center gap-2 cursor-pointer"
+            >
+              <FileJson className="w-4 h-4 text-emerald-700" />
+              <span>Restore from Backup (.json)</span>
+            </button>
+          </div>
+
+          {!confirmResetDefaults ? (
+            <button
+              type="button"
+              onClick={() => setConfirmResetDefaults(true)}
+              className="px-3 py-2 rounded-xl text-slate-500 hover:text-rose-700 hover:bg-rose-50 font-semibold text-xs transition flex items-center gap-1.5"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset to demo defaults</span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 bg-rose-50 border border-rose-200 px-3 py-1.5 rounded-xl">
+              <span className="text-xs font-semibold text-rose-800">
+                Overwrite current data with demo defaults?
+              </span>
+              <button
+                type="button"
+                onClick={handleFactoryReset}
+                className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs"
+              >
+                Confirm Reset
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmResetDefaults(false)}
+                className="px-2 py-1 rounded-lg text-slate-600 hover:bg-rose-100 font-semibold text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Status Banner */}
+        {backupNotice && (
+          <div
+            className={`p-3.5 rounded-xl border flex items-start justify-between gap-3 text-xs ${
+              backupNotice.type === 'success'
+                ? 'bg-emerald-50/90 border-emerald-200 text-emerald-900'
+                : 'bg-rose-50 border-rose-200 text-rose-900'
+            }`}
+          >
+            <div className="flex items-start gap-2.5">
+              {backupNotice.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              )}
+              <div>
+                <div className="font-bold">{backupNotice.title}</div>
+                <div className="text-[11px] opacity-90 mt-0.5">{backupNotice.detail}</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setBackupNotice(null)}
+              className="text-[11px] font-semibold underline opacity-75 hover:opacity-100 shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Bottom Sticky Save Bar (Screenshot 3) */}

@@ -11,10 +11,29 @@ import {
   DEFAULT_COUNTERS,
   CustomerKhata,
   KhataEntry,
-  INITIAL_KHATA_CUSTOMERS
+  INITIAL_KHATA_CUSTOMERS,
+  UserAccount,
+  ExpenseRecord,
+  MonthlyAuditSnapshot
 } from '../types/pharmacy';
 import { INITIAL_ZAHID_MEDICINES } from '../data/initialMedicines';
 import { getDaysUntilExpiry, getTotalPiecesInStock, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
+import { staffAuth } from './staffAuth';
+
+export interface PharmacyBackupSnapshot {
+  schemaVersion: string;
+  application: string;
+  exportedAt: string;
+  pharmacyDetails: PharmacyDetails;
+  counters: PharmacyCounter[];
+  activeCounter: string;
+  medicines: MedicineItem[];
+  sales: SaleTransaction[];
+  khataCustomers: CustomerKhata[];
+  staffAccounts: UserAccount[];
+  expenses?: ExpenseRecord[];
+  auditSnapshots?: MonthlyAuditSnapshot[];
+}
 
 const INVENTORY_STORAGE_KEY = 'zahid_med_inventory_v2';
 const SALES_STORAGE_KEY = 'zahid_med_sales_v2';
@@ -23,6 +42,8 @@ const SETTINGS_STORAGE_KEY = 'zahid_pharmacy_settings_v1';
 const COUNTERS_STORAGE_KEY = 'zahid_counters_v1';
 const ACTIVE_COUNTER_KEY = 'zahid_active_counter_v1';
 const KHATA_STORAGE_KEY = 'zahid_khata_customers_v1';
+const EXPENSES_STORAGE_KEY = 'zahid_pharmacy_expenses_v1';
+const AUDIT_SNAPSHOTS_KEY = 'zahid_monthly_audits_v1';
 
 export class PharmacySyncEngine {
   private medicines: MedicineItem[] = [];
@@ -32,6 +53,8 @@ export class PharmacySyncEngine {
   private counters: PharmacyCounter[] = [...DEFAULT_COUNTERS];
   private activeCounter: string = 'Main Counter';
   private khataCustomers: CustomerKhata[] = [...INITIAL_KHATA_CUSTOMERS];
+  private expenses: ExpenseRecord[] = [];
+  private auditSnapshots: MonthlyAuditSnapshot[] = [];
   private subscribers: Array<() => void> = [];
 
   constructor() {
@@ -105,6 +128,13 @@ export class PharmacySyncEngine {
         this.khataCustomers = [...INITIAL_KHATA_CUSTOMERS];
         localStorage.setItem(KHATA_STORAGE_KEY, JSON.stringify(this.khataCustomers));
       }
+
+      // 7. Load Expenses & Monthly Audit Snapshots
+      const savedExpenses = localStorage.getItem(EXPENSES_STORAGE_KEY);
+      this.expenses = savedExpenses ? JSON.parse(savedExpenses) : [];
+
+      const savedAudits = localStorage.getItem(AUDIT_SNAPSHOTS_KEY);
+      this.auditSnapshots = savedAudits ? JSON.parse(savedAudits) : [];
     } catch (e) {
       console.warn('Failed to initialize local pharmacy store, falling back to defaults', e);
       this.medicines = [...INITIAL_ZAHID_MEDICINES];
@@ -114,6 +144,8 @@ export class PharmacySyncEngine {
       this.counters = [...DEFAULT_COUNTERS];
       this.activeCounter = 'Main Counter';
       this.khataCustomers = [...INITIAL_KHATA_CUSTOMERS];
+      this.expenses = [];
+      this.auditSnapshots = [];
     }
   }
 
@@ -1128,6 +1160,351 @@ export class PharmacySyncEngine {
     return { synced, failed };
   }
 
+  // --- Monthly Financial Audit & Expense Ledger ---
+  public getExpenses(monthKey?: string): ExpenseRecord[] {
+    if (!monthKey) return [...this.expenses];
+    return this.expenses.filter((e) => e.monthKey === monthKey);
+  }
+
+  public async addExpense(data: {
+    date: string;
+    frequency: 'daily' | 'monthly';
+    category: string;
+    title: string;
+    amount: number;
+    paidBy: string;
+    paymentMethod: 'Cash' | 'EasyPaisa' | 'JazzCash' | 'Bank Transfer';
+    note?: string;
+  }): Promise<ExpenseRecord> {
+    const cleanDate = data.date || new Date().toISOString().slice(0, 10);
+    const monthKey = cleanDate.slice(0, 7); // 'YYYY-MM'
+    const newExpense: ExpenseRecord = {
+      id: `exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      monthKey,
+      date: cleanDate,
+      frequency: data.frequency,
+      category: data.category,
+      title: data.title.trim() || data.category,
+      amount: Math.max(0, Number(data.amount) || 0),
+      paidBy: data.paidBy,
+      paymentMethod: data.paymentMethod,
+      note: data.note?.trim(),
+      createdAt: new Date().toISOString(),
+    };
+
+    this.expenses.unshift(newExpense);
+    try {
+      localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(this.expenses));
+    } catch {}
+    this.enqueueOutbox('ADD_EXPENSE', newExpense);
+    this.notify();
+
+    try {
+      await pb.collection('pharmacy_expenses').create(newExpense);
+    } catch {}
+
+    return newExpense;
+  }
+
+  public async deleteExpense(id: string): Promise<boolean> {
+    this.expenses = this.expenses.filter((e) => e.id !== id);
+    try {
+      localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(this.expenses));
+    } catch {}
+    this.enqueueOutbox('DELETE_EXPENSE', { id });
+    this.notify();
+
+    try {
+      await pb.collection('pharmacy_expenses').delete(id);
+    } catch {}
+    return true;
+  }
+
+  /**
+   * Calculates live Monthly Audit metrics for any YYYY-MM month by combining
+   * Sales Gross Profit from Reports + Daily Expenses + Monthly Fixed Expenses
+   */
+  public calculateMonthlyAudit(monthKey: string): MonthlyAuditSnapshot {
+    const [yearStr, monthStr] = monthKey.split('-');
+    const dateObj = new Date(Number(yearStr), Number(monthStr) - 1, 1);
+    const monthLabel = dateObj.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+    // 1. Filter sales belonging to this YYYY-MM
+    const monthSales = this.sales.filter((s) => {
+      if (s.status === 'refunded') return false;
+      return s.createdAt.slice(0, 7) === monthKey;
+    });
+
+    const totalSalesCount = monthSales.length;
+    const grossRevenue = Number(
+      monthSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0).toFixed(2)
+    );
+    const grossSalesProfit = Number(
+      monthSales.reduce((sum, s) => sum + (s.totalProfit || 0), 0).toFixed(2)
+    );
+    const totalDiscountsGiven = Number(
+      monthSales.reduce((sum, s) => sum + (s.discountAmount || 0), 0).toFixed(2)
+    );
+
+    // 2. Filter daily and monthly expenses for this YYYY-MM
+    const monthExpenses = this.expenses.filter((e) => e.monthKey === monthKey);
+    const dailyExpensesTotal = Number(
+      monthExpenses
+        .filter((e) => e.frequency === 'daily')
+        .reduce((sum, e) => sum + e.amount, 0)
+        .toFixed(2)
+    );
+    const monthlyExpensesTotal = Number(
+      monthExpenses
+        .filter((e) => e.frequency === 'monthly')
+        .reduce((sum, e) => sum + e.amount, 0)
+        .toFixed(2)
+    );
+
+    const totalExpenses = Number((dailyExpensesTotal + monthlyExpensesTotal).toFixed(2));
+    const netTakeHomeProfit = Number((grossSalesProfit - totalExpenses).toFixed(2));
+    const profitMarginPercent =
+      grossRevenue > 0 ? Number(((netTakeHomeProfit / grossRevenue) * 100).toFixed(1)) : 0;
+
+    const existingSaved = this.auditSnapshots.find((a) => a.monthKey === monthKey);
+
+    return {
+      monthKey,
+      monthLabel,
+      totalSalesCount,
+      grossRevenue,
+      grossSalesProfit,
+      totalDiscountsGiven,
+      dailyExpensesTotal,
+      monthlyExpensesTotal,
+      totalExpenses,
+      netTakeHomeProfit,
+      profitMarginPercent,
+      isClosed: existingSaved?.isClosed || false,
+      closedAt: existingSaved?.closedAt,
+      notes: existingSaved?.notes,
+    };
+  }
+
+  /**
+   * Stores / Archives the monthly profit calculation into the permanent Monthly Ledger
+   */
+  public saveMonthlyAuditSnapshot(
+    monthKey: string,
+    notes?: string,
+    markClosed = false
+  ): MonthlyAuditSnapshot {
+    const computed = this.calculateMonthlyAudit(monthKey);
+    const snapshot: MonthlyAuditSnapshot = {
+      ...computed,
+      isClosed: markClosed ? true : computed.isClosed,
+      closedAt: markClosed ? new Date().toISOString() : computed.closedAt,
+      notes: notes !== undefined ? notes : computed.notes,
+    };
+
+    const idx = this.auditSnapshots.findIndex((a) => a.monthKey === monthKey);
+    if (idx > -1) {
+      this.auditSnapshots[idx] = snapshot;
+    } else {
+      this.auditSnapshots.unshift(snapshot);
+    }
+
+    this.auditSnapshots.sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+    try {
+      localStorage.setItem(AUDIT_SNAPSHOTS_KEY, JSON.stringify(this.auditSnapshots));
+    } catch {}
+    this.enqueueOutbox('SAVE_MONTHLY_AUDIT', snapshot);
+    this.notify();
+    return snapshot;
+  }
+
+  public getAllMonthlyAudits(): MonthlyAuditSnapshot[] {
+    // Collect all unique YYYY-MM keys from sales, expenses, Saved Snapshots, and current month
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const monthKeys = new Set<string>([currentMonth]);
+
+    this.sales.forEach((s) => {
+      if (s.createdAt && s.createdAt.length >= 7) monthKeys.add(s.createdAt.slice(0, 7));
+    });
+    this.expenses.forEach((e) => {
+      if (e.monthKey) monthKeys.add(e.monthKey);
+    });
+    this.auditSnapshots.forEach((a) => {
+      if (a.monthKey) monthKeys.add(a.monthKey);
+    });
+
+    return Array.from(monthKeys)
+      .sort((a, b) => b.localeCompare(a))
+      .map((key) => this.calculateMonthlyAudit(key));
+  }
+
+  public createBackupSnapshot(): PharmacyBackupSnapshot {
+    return {
+      schemaVersion: '2.0',
+      application: 'Zahid Medicine Store POS & Inventory System',
+      exportedAt: new Date().toISOString(),
+      pharmacyDetails: { ...this.pharmacyDetails },
+      counters: this.counters.map((c) => ({ ...c })),
+      activeCounter: this.activeCounter,
+      medicines: this.medicines.map((m) => ({ ...m })),
+      sales: this.sales.map((s) => ({
+        ...s,
+        items: Array.isArray(s.items) ? s.items.map((i) => ({ ...i })) : [],
+      })),
+      khataCustomers: this.khataCustomers.map((k) => ({
+        ...k,
+        history: Array.isArray(k.history) ? k.history.map((t: KhataEntry) => ({ ...t })) : [],
+      })),
+      staffAccounts: staffAuth.getStaffList().map((u) => ({ ...u })),
+      expenses: this.expenses.map((e) => ({ ...e })),
+      auditSnapshots: this.auditSnapshots.map((a) => ({ ...a })),
+    };
+  }
+
+  public restoreFromBackup(rawInput: string | Record<string, unknown>): {
+    medicinesCount: number;
+    salesCount: number;
+    khataCount: number;
+    staffCount: number;
+    countersCount: number;
+    exportedAt?: string;
+  } {
+    const parsed: Record<string, unknown> =
+      typeof rawInput === 'string' ? (JSON.parse(rawInput) as Record<string, unknown>) : rawInput;
+
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('Invalid backup file: Root JSON must be an object.');
+    }
+
+    const hasRecognizedKeys =
+      Array.isArray(parsed.medicines) ||
+      Array.isArray(parsed.sales) ||
+      Array.isArray(parsed.khataCustomers) ||
+      (parsed.pharmacyDetails && typeof parsed.pharmacyDetails === 'object');
+
+    if (!hasRecognizedKeys) {
+      throw new Error(
+        'Unrecognized backup format: Missing medicines, sales, khataCustomers, or pharmacyDetails.'
+      );
+    }
+
+    // 1. Restore Medicines
+    if (Array.isArray(parsed.medicines)) {
+      this.medicines = (parsed.medicines as MedicineItem[])
+        .filter((m) => m && typeof m.id === 'string' && typeof m.name === 'string')
+        .map((m) => {
+          const unitsPerPack = Math.max(1, Number(m.unitsPerPack) || 1);
+          const currentStockPacks = Math.max(0, Number(m.currentStockPacks) || 0);
+          const currentStockLoose = Math.max(0, Number(m.currentStockLoose) || 0);
+          const minThresholdPacks = Math.max(1, Number(m.minThresholdPacks) || 5);
+          const isStillLow = currentStockPacks <= minThresholdPacks;
+          return {
+            ...m,
+            unitsPerPack,
+            currentStockPacks,
+            currentStockLoose,
+            minThresholdPacks,
+            reorderStatus:
+              isStillLow && m.reorderStatus === 'ordered' ? 'ordered' : 'needed',
+            orderedAt:
+              isStillLow && m.reorderStatus === 'ordered' ? m.orderedAt : undefined,
+          };
+        });
+      this.saveMedicines();
+    }
+
+    // 2. Restore Sales
+    if (Array.isArray(parsed.sales)) {
+      this.sales = (parsed.sales as SaleTransaction[]).filter(
+        (s) => s && typeof s.id === 'string' && typeof s.invoiceNumber === 'string'
+      );
+      this.saveSales();
+    }
+
+    // 3. Restore Khata Customers
+    if (Array.isArray(parsed.khataCustomers)) {
+      this.khataCustomers = (parsed.khataCustomers as CustomerKhata[])
+        .filter((k) => k && typeof k.id === 'string' && typeof k.name === 'string')
+        .map((k) => ({
+          ...k,
+          balanceDue: Math.max(0, Number(k.balanceDue) || 0),
+          history: Array.isArray(k.history) ? k.history : [],
+        }));
+      this.saveKhata();
+    }
+
+    // 4. Restore Pharmacy Details
+    if (parsed.pharmacyDetails && typeof parsed.pharmacyDetails === 'object') {
+      this.pharmacyDetails = {
+        ...DEFAULT_PHARMACY_DETAILS,
+        ...(parsed.pharmacyDetails as Partial<PharmacyDetails>),
+      };
+      try {
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.pharmacyDetails));
+      } catch {}
+    }
+
+    // 5. Restore Counters & Active Counter
+    if (Array.isArray(parsed.counters) && parsed.counters.length > 0) {
+      this.counters = (parsed.counters as PharmacyCounter[]).filter(
+        (c) => c && typeof c.id === 'string' && typeof c.name === 'string'
+      );
+      if (this.counters.length === 0) {
+        this.counters = [...DEFAULT_COUNTERS];
+      }
+      try {
+        localStorage.setItem(COUNTERS_STORAGE_KEY, JSON.stringify(this.counters));
+      } catch {}
+    }
+
+    if (typeof parsed.activeCounter === 'string' && parsed.activeCounter.trim()) {
+      const counterExists = this.counters.some((c) => c.name === parsed.activeCounter);
+      this.activeCounter = counterExists ? parsed.activeCounter : this.counters[0].name;
+      try {
+        localStorage.setItem(ACTIVE_COUNTER_KEY, this.activeCounter);
+      } catch {}
+    }
+
+    // 6. Restore Staff Accounts if included
+    let staffCount = staffAuth.getStaffList().length;
+    if (Array.isArray(parsed.staffAccounts) && parsed.staffAccounts.length > 0) {
+      staffCount = staffAuth.restoreStaffList(parsed.staffAccounts as UserAccount[]);
+    }
+
+    // 7. Restore Expenses & Monthly Audits if included
+    if (Array.isArray(parsed.expenses)) {
+      this.expenses = (parsed.expenses as ExpenseRecord[]).filter(
+        (e) => e && typeof e.id === 'string' && typeof e.monthKey === 'string'
+      );
+      try {
+        localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(this.expenses));
+      } catch {}
+    }
+
+    if (Array.isArray(parsed.auditSnapshots)) {
+      this.auditSnapshots = (parsed.auditSnapshots as MonthlyAuditSnapshot[]).filter(
+        (a) => a && typeof a.monthKey === 'string'
+      );
+      try {
+        localStorage.setItem(AUDIT_SNAPSHOTS_KEY, JSON.stringify(this.auditSnapshots));
+      } catch {}
+    }
+
+    // Clear stale outbox and notify all views
+    this.outbox = [];
+    this.saveOutbox();
+    this.notify();
+
+    return {
+      medicinesCount: this.medicines.length,
+      salesCount: this.sales.length,
+      khataCount: this.khataCustomers.length,
+      staffCount,
+      countersCount: this.counters.length,
+      exportedAt: typeof parsed.exportedAt === 'string' ? parsed.exportedAt : undefined,
+    };
+  }
+
   public resetToDefaults(): void {
     this.medicines = [...INITIAL_ZAHID_MEDICINES];
     this.sales = [];
@@ -1136,6 +1513,8 @@ export class PharmacySyncEngine {
     this.counters = [...DEFAULT_COUNTERS];
     this.activeCounter = 'Main Counter';
     this.khataCustomers = [...INITIAL_KHATA_CUSTOMERS];
+    this.expenses = [];
+    this.auditSnapshots = [];
     this.saveMedicines();
     this.saveSales();
     this.saveOutbox();
@@ -1144,6 +1523,8 @@ export class PharmacySyncEngine {
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.pharmacyDetails));
       localStorage.setItem(COUNTERS_STORAGE_KEY, JSON.stringify(this.counters));
       localStorage.setItem(ACTIVE_COUNTER_KEY, this.activeCounter);
+      localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(this.expenses));
+      localStorage.setItem(AUDIT_SNAPSHOTS_KEY, JSON.stringify(this.auditSnapshots));
     } catch {}
     this.notify();
   }

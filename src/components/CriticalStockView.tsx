@@ -16,9 +16,11 @@ import {
   Square,
   Truck,
   RotateCcw,
+  Printer,
 } from 'lucide-react';
 import { MedicineItem } from '../types/pharmacy';
 import { exportCriticalStockToExcel, exportCriticalStockToCSV } from '../services/excelExporter';
+import { generatePurchaseOrderPDF } from '../services/pdfGenerator';
 import { soundService } from '../services/soundAlerts';
 
 interface CriticalStockViewProps {
@@ -267,6 +269,20 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
                 )}
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => {
+                soundService.click();
+                generatePurchaseOrderPDF(filteredItems, selectedCategory);
+              }}
+              disabled={filteredItems.length === 0}
+              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 transition shadow-sm disabled:opacity-50 cursor-pointer"
+              title="Generate printable A4 Supplier Purchase Order (Demand List) PDF"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Purchase Order PDF</span>
+            </button>
 
             <button
               type="button"

@@ -19,7 +19,8 @@ import {
   HardDrive,
   Keyboard,
   HelpCircle,
-  ShieldAlert
+  ShieldAlert,
+  Wallet
 } from 'lucide-react';
 import { 
   ConnectionStatus, 
@@ -43,6 +44,7 @@ import { SpreadsheetView } from './components/SpreadsheetView';
 import { CriticalStockView } from './components/CriticalStockView';
 import { CreditKhataView } from './components/CreditKhataView';
 import { ReportsView } from './components/ReportsView';
+import { AuditView } from './components/AuditView';
 import { SettingsView } from './components/SettingsView';
 import { LockScreen } from './components/LockScreen';
 import { AuthModal } from './components/AuthModal';
@@ -408,6 +410,8 @@ export default function App() {
         return 'Credit khata';
       case 'reports':
         return 'Sales reports';
+      case 'audit':
+        return 'Monthly profit & expense audit';
       case 'settings':
         return 'Pharmacy settings';
       default:
@@ -661,6 +665,24 @@ export default function App() {
                     ^R
                   </kbd>
                 </button>
+
+                {currentUser.role === 'owner' && (
+                  <button
+                    onClick={() => handleNavigateTab('audit', '⚡ Monthly Profit & Expense Audit')}
+                    className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                      activeTab === 'audit'
+                        ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
+                        : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
+                    }`}
+                    title="Monthly Profit & Expense Audit (Owner Only)"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Wallet className="w-4 h-4 text-emerald-400" />
+                      <span>Profit &amp; expense audit</span>
+                    </div>
+                    <span className="text-[10px] opacity-75">Owner</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -917,6 +939,10 @@ export default function App() {
                 currentUser.role === 'owner' || currentUser.role === 'pharmacist'
               }
             />
+          )}
+
+          {activeTab === 'audit' && currentUser.role === 'owner' && (
+            <AuditView currentUser={currentUser} />
           )}
 
           {activeTab === 'settings' && (

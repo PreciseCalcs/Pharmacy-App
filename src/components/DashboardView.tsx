@@ -20,7 +20,8 @@ import {
   ShoppingBag,
   Pill,
   CheckCircle2,
-  Boxes
+  Boxes,
+  Printer
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -35,6 +36,8 @@ import { MedicineItem, SaleTransaction, PharmacyDetails } from '../types/pharmac
 import { formatPKR, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
 import { isToday } from '../utils/dates';
 import { syncEngine } from '../services/syncEngine';
+import { generatePurchaseOrderPDF } from '../services/pdfGenerator';
+import { soundService } from '../services/soundAlerts';
 
 interface DashboardViewProps {
   medicines: MedicineItem[];
@@ -543,6 +546,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 Rs {totalReorderEstimatedCost.toLocaleString()}
               </span>
             </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                soundService.click();
+                generatePurchaseOrderPDF(
+                  filteredCriticalStock,
+                  stockAlertFilter === 'all' ? undefined : stockAlertFilter
+                );
+              }}
+              disabled={filteredCriticalStock.length === 0}
+              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+              title="Generate printable A4 Supplier Purchase Order (Demand List) PDF for low-stock items"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>Demand List PDF</span>
+            </button>
 
             <button
               onClick={() => onNavigateTab('critical_stock')}

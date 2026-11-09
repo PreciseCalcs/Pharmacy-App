@@ -1,4 +1,4 @@
-import { UserAccount } from '../types/pharmacy';
+import { UserAccount, UserRole } from '../types/pharmacy';
 
 const STAFF_STORAGE_KEY = 'zahid_med_users_v2';
 const ACTIVE_USER_KEY = 'zahid_active_user_v2';
@@ -315,6 +315,48 @@ class StaffAuthService {
     this.users = this.users.filter((u) => u.id !== userId);
     this.saveUsers();
     return { success: true };
+  }
+
+  public restoreStaffList(incomingUsers: UserAccount[]): number {
+    if (!Array.isArray(incomingUsers) || incomingUsers.length === 0) {
+      return this.users.length;
+    }
+
+    const validRoles: UserRole[] = ['owner', 'pharmacist', 'cashier'];
+    const sanitized: UserAccount[] = incomingUsers
+      .filter((u) => u && typeof u.id === 'string' && typeof u.name === 'string')
+      .map((u) => ({
+        id: u.id,
+        name: u.name.trim(),
+        role: validRoles.includes(u.role) ? u.role : 'cashier',
+        pin: hashPin(String(u.pin || '1111')),
+        phone: u.phone ? String(u.phone).trim() : undefined,
+        email: u.email ? String(u.email).trim() : undefined,
+        isActive: u.isActive !== false,
+        lastLogin: u.lastLogin,
+      }));
+
+    if (sanitized.length === 0) {
+      return this.users.length;
+    }
+
+    // Ensure at least one owner account exists so settings never lock out
+    if (!sanitized.some((u) => u.role === 'owner')) {
+      sanitized[0].role = 'owner';
+    }
+
+    this.users = sanitized;
+    this.saveUsers();
+
+    if (this.currentUser) {
+      const updatedCurrent = this.users.find((u) => u.id === this.currentUser?.id);
+      this.currentUser = updatedCurrent ? { ...updatedCurrent } : { ...this.users[0] };
+      try {
+        localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(this.currentUser));
+      } catch {}
+    }
+
+    return this.users.length;
   }
 
   private saveUsers(): void {

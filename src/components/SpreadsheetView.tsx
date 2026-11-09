@@ -33,6 +33,7 @@ import {
 } from '../services/excelExporter';
 import { soundService } from '../services/soundAlerts';
 import { syncEngine } from '../services/syncEngine';
+import { generatePurchaseOrderPDF } from '../services/pdfGenerator';
 
 interface SpreadsheetViewProps {
   medicines: MedicineItem[];
@@ -229,6 +230,18 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
           >
             <Download className="w-4 h-4 text-slate-600" />
             <span>Export Excel</span>
+          </button>
+
+          <button
+            onClick={() => {
+              soundService.click();
+              generatePurchaseOrderPDF(medicines);
+            }}
+            className="px-3 py-2 rounded-xl border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+            title="Generate printable Supplier Purchase Order (Demand List) PDF for all items below reorder threshold"
+          >
+            <Printer className="w-4 h-4 text-rose-600" />
+            <span>Demand List PDF</span>
           </button>
 
           <button
