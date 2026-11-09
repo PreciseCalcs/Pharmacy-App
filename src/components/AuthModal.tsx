@@ -31,10 +31,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const staffList = staffAuth.getStaffList();
   const currentUser = staffAuth.getCurrentUser();
 
-  const handleSwitchUser = (e: React.FormEvent) => {
+  const handleSwitchUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    const res = staffAuth.switchUser(pin);
+    const res = await staffAuth.switchUser(pin);
     if (res.success && res.user) {
       soundService.cashRegister();
       onUserChanged(res.user);
@@ -45,7 +45,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  const handleChangePin = (e: React.FormEvent) => {
+  const handleChangePin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
@@ -55,7 +55,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       return;
     }
 
-    const res = staffAuth.changePin(currentUser.id, oldPin, newPin);
+    const res = await staffAuth.changePin(currentUser.id, oldPin, newPin);
     if (res.success) {
       soundService.cashRegister();
       setSuccess('PIN changed successfully');

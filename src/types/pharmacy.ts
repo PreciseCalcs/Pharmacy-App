@@ -57,7 +57,10 @@ export interface UserAccount {
   id: string;
   name: string;
   role: UserRole;
-  pin: string; // 4-6 digit numeric PIN / password
+  /** SHA-256 hash of the user's PIN (salted per-user). The plaintext PIN is never stored. */
+  pinHash: string;
+  /** Per-user random salt (hex) used with the PIN hash to defeat rainbow tables. */
+  pinSalt: string;
   phone?: string;
   email?: string;
   isActive: boolean;

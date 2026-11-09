@@ -111,6 +111,11 @@ export default function App() {
 
   // SyncEngine Subscription
   useEffect(() => {
+    // staffAuth init is async (PIN hashing/migration); refresh auth state once ready.
+    staffAuth.whenReady().then(() => {
+      setCurrentUser(staffAuth.getCurrentUser());
+      setIsLocked(staffAuth.isLocked());
+    });
     refreshHealth();
     const unsub = syncEngine.subscribe(() => {
       setMedicines(syncEngine.getMedicines());

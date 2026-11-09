@@ -77,10 +77,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
 
   // Owner PIN check if not logged in as owner
-  const handleVerifyOwner = (e: React.FormEvent) => {
+  const handleVerifyOwner = async (e: React.FormEvent) => {
     e.preventDefault();
     setVerifyError('');
-    const user = staffAuth.verifyPin(verifyPin);
+    const user = await staffAuth.verifyPin(verifyPin);
     if (user && user.role === 'owner') {
       soundService.cashRegister();
       setIsOwnerUnlocked(true);
@@ -140,7 +140,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   // Staff User Management
-  const handleAddUser = (e: React.FormEvent) => {
+  const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setUserError('');
 
@@ -153,7 +153,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       return;
     }
 
-    const res = staffAuth.addStaff({
+    const res = await staffAuth.addStaff({
       name: newUserName.trim(),
       role: newUserRole,
       pin: newUserPin,
@@ -181,15 +181,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setEditingUserId(u.id);
     setEditName(u.name);
     setEditRole(u.role);
-    setEditPin(u.pin);
+    // PIN is stored only as a salted hash — never prefill it. Leave blank to keep current PIN.
+    setEditPin('');
     setEditPhone(u.phone || '');
   };
 
-  const handleSaveEditUser = (userId: string) => {
-    const res = staffAuth.editUserAccount(userId, {
+  const handleSaveEditUser = async (userId: string) => {
+    const res = await staffAuth.editUserAccount(userId, {
       name: editName,
       role: editRole,
-      pin: editPin,
+      pin: editPin || undefined,
       phone: editPhone,
     });
 
@@ -643,12 +644,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </select>
                     </div>
                     <div>
-                      <span className="text-[10px] text-slate-500 block">New PIN / Password</span>
+                      <span className="text-[10px] text-slate-500 block">New PIN (leave blank to keep current)</span>
                       <input
                         type="password"
                         maxLength={6}
                         value={editPin}
                         onChange={(e) => setEditPin(e.target.value)}
+                        placeholder="• • • •"
                         className="w-full px-2 py-1 rounded border border-slate-300 bg-white font-mono tracking-widest"
                       />
                     </div>

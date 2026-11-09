@@ -39,8 +39,8 @@ export const LockScreen: React.FC<LockScreenProps> = ({ onUnlock }) => {
     setError('');
   };
 
-  const attemptUnlock = (candidatePin: string) => {
-    const res = staffAuth.unlock(candidatePin);
+  const attemptUnlock = async (candidatePin: string) => {
+    const res = await staffAuth.unlock(candidatePin);
     if (res.success && res.user) {
       soundService.cashRegister();
       onUnlock(res.user);

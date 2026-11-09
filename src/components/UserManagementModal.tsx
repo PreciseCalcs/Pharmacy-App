@@ -32,7 +32,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     onStaffUpdated();
   };
 
-  const handleCreate = (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
@@ -47,7 +47,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       return;
     }
 
-    const res = staffAuth.addStaff({
+    const res = await staffAuth.addStaff({
       name: name.trim(),
       role,
       pin,
