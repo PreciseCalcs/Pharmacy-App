@@ -434,7 +434,7 @@ export default function App() {
       case 'khata':
         return 'Credit khata';
       case 'suppliers':
-        return 'Supplier & GRN khata';
+        return 'Supplier & GRN';
       case 'reports':
         return 'Sales reports';
       case 'audit':
@@ -705,7 +705,7 @@ export default function App() {
                   >
                     <div className="flex items-center gap-2.5">
                       <Truck className="w-4 h-4 text-emerald-400" />
-                      <span>Supplier &amp; GRN khata</span>
+                      <span>Supplier &amp; GRN</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                       {suppliersPayableCount > 0 && (
