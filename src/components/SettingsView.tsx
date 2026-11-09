@@ -263,55 +263,46 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  // If locked, render Owner PIN challenge
+ // If locked, render Owner PIN challenge
   if (!isOwnerUnlocked) {
     return (
-      <div className="max-w-md mx-auto py-16 text-center">
-        <div className="bg-white rounded-3xl p-8 border border-slate-200 shadow-xl space-y-4">
-          <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center mx-auto">
-            <Shield className="w-7 h-7" />
-          </div>
-
-          <h2 className="text-xl font-bold text-slate-900">Owner Access Required</h2>
-          <p className="text-xs text-slate-500">
+      <div className="max-w-md mx-auto my-8 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm text-center space-y-4">
+        <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center mx-auto">
+          <Shield className="w-6 h-6" />
+        </div>
+        <div>
+          <h2 className="text-base font-bold text-slate-900">Owner Access Required</h2>
+          <p className="text-xs text-slate-500 mt-1">
             Pharmacy identity, staff accounts, licence details, and settings can only be managed by the Chief Pharmacist / Store Owner.
           </p>
-
-          {verifyError && (
-            <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{verifyError}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleVerifyOwner} className="space-y-3 pt-2">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Enter Owner Security PIN
-              </label>
-              <input
-                type="password"
-                maxLength={6}
-                value={verifyPin}
-                onChange={(e) => setVerifyPin(e.target.value)}
-                placeholder="&bull;&bull;&bull;&bull;"
-                className="w-full text-center text-lg font-mono tracking-widest px-3 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                autoFocus
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-2.5 rounded-xl bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-xs shadow-xs transition"
-            >
-              Verify & Open Settings
-            </button>
-          </form>
-
-          <p className="text-[11px] text-slate-400">
-            Default Owner PIN: <code className="font-mono text-slate-700">7788</code>
-          </p>
         </div>
+        {verifyError && (
+          <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center justify-center gap-1.5">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{verifyError}</span>
+          </div>
+        )}
+        <form onSubmit={handleVerifyOwner} className="space-y-3">
+          <div className="space-y-1">
+            <label className="block text-xs font-bold text-slate-700">Enter Owner Security PIN</label>
+            <input
+              type="password"
+              inputMode="numeric"
+              maxLength={6}
+              value={verifyPin}
+              onChange={(e) => setVerifyPin(e.target.value)}
+              placeholder="••••"
+              className="w-full text-center text-lg font-mono tracking-widest px-3 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              autoFocus
+            />
+          </div>
+          <button
+            type="submit"
+            className="w-full py-2.5 rounded-xl bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-xs shadow-sm transition"
+          >
+            Verify & Open Settings
+          </button>
+        </form>
       </div>
     );
   }
