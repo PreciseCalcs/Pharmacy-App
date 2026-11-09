@@ -222,3 +222,106 @@ export async function parseMedicineExcelFile(file: File): Promise<Partial<Medici
     reader.readAsBinaryString(file);
   });
 }
+
+/**
+ * Export critical low-stock items to Excel (.xlsx) workbook, organized for procurement and supplier reordering
+ */
+export function exportCriticalStockToExcel(medicines: MedicineItem[], categoryFilter?: string): void {
+  const criticalItems = medicines.filter((m) => m.currentStockPacks <= (m.minThresholdPacks || 5));
+  const filtered = categoryFilter && categoryFilter !== 'All'
+    ? criticalItems.filter((m) => m.category === categoryFilter || m.department === categoryFilter)
+    : criticalItems;
+
+  const data = filtered.map((m, idx) => {
+    const threshold = m.minThresholdPacks || 5;
+    const deficit = Math.max(0, threshold - m.currentStockPacks);
+    const estCost = deficit * (m.unitCostPrice || 0);
+
+    return {
+      'S.No': idx + 1,
+      'Category': m.category,
+      'Product Name': m.name,
+      'Generic Formula': m.genericName,
+      'Dosage Form': m.dosageForm,
+      'Strength': m.strength,
+      'Current Packs': m.currentStockPacks,
+      'Current Loose': m.currentStockLoose || 0,
+      'Safety Threshold (Packs)': threshold,
+      'Deficit to Order (Packs)': deficit,
+      'Unit Cost (PKR)': m.unitCostPrice,
+      'Est. Order Budget (PKR)': estCost,
+      'Preferred Supplier': m.supplier || 'General Distributor',
+      'Shelf Location': m.shelfLocation || '-',
+      'Barcode': m.barcode || '-',
+      'SKU': m.sku || '-',
+    };
+  });
+
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Critical Reorder List');
+
+  const catSuffix = categoryFilter && categoryFilter !== 'All' ? `_${categoryFilter.replace(/\s+/g, '_')}` : '';
+  const fileName = `Zahid_Medical_Reorder_List${catSuffix}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+}
+
+/**
+ * Export critical low-stock items to CSV for distributor email / WhatsApp / ERP
+ */
+export function exportCriticalStockToCSV(medicines: MedicineItem[], categoryFilter?: string): void {
+  const criticalItems = medicines.filter((m) => m.currentStockPacks <= (m.minThresholdPacks || 5));
+  const filtered = categoryFilter && categoryFilter !== 'All'
+    ? criticalItems.filter((m) => m.category === categoryFilter || m.department === categoryFilter)
+    : criticalItems;
+
+  const headers = [
+    'S.No',
+    'Category',
+    'Product Name',
+    'Generic Formula',
+    'Dosage Form',
+    'Strength',
+    'Current Packs',
+    'Threshold',
+    'Deficit to Order',
+    'Unit Cost (PKR)',
+    'Est. Budget (PKR)',
+    'Supplier',
+    'Shelf Location'
+  ];
+
+  const rows = filtered.map((m, idx) => {
+    const threshold = m.minThresholdPacks || 5;
+    const deficit = Math.max(0, threshold - m.currentStockPacks);
+    const estCost = deficit * (m.unitCostPrice || 0);
+
+    return [
+      idx + 1,
+      `"${(m.category || '').replace(/"/g, '""')}"`,
+      `"${(m.name || '').replace(/"/g, '""')}"`,
+      `"${(m.genericName || '').replace(/"/g, '""')}"`,
+      `"${m.dosageForm || ''}"`,
+      `"${m.strength || ''}"`,
+      m.currentStockPacks,
+      threshold,
+      deficit,
+      m.unitCostPrice,
+      estCost,
+      `"${(m.supplier || 'General Distributor').replace(/"/g, '""')}"`,
+      `"${(m.shelfLocation || '').replace(/"/g, '""')}"`
+    ].join(',');
+  });
+
+  const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  const catSuffix = categoryFilter && categoryFilter !== 'All' ? `_${categoryFilter.replace(/\s+/g, '_')}` : '';
+  link.setAttribute('download', `Zahid_Medical_Reorder_List${catSuffix}_${new Date().toISOString().slice(0, 10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}

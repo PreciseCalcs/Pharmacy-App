@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   LayoutDashboard, 
   ShoppingCart, 
@@ -18,7 +18,8 @@ import {
   Building2,
   HardDrive,
   Keyboard,
-  HelpCircle
+  HelpCircle,
+  ShieldAlert
 } from 'lucide-react';
 import { 
   ConnectionStatus, 
@@ -39,6 +40,7 @@ import { can, canOpenTab, defaultTabFor } from './utils/permissions';
 import { DashboardView } from './components/DashboardView';
 import { PosView } from './components/PosView';
 import { SpreadsheetView } from './components/SpreadsheetView';
+import { CriticalStockView } from './components/CriticalStockView';
 import { CreditKhataView } from './components/CreditKhataView';
 import { ReportsView } from './components/ReportsView';
 import { SettingsView } from './components/SettingsView';
@@ -333,12 +335,6 @@ export default function App() {
     }
   };
 
-  const showToast = (message: string, type: 'success' | 'warn') => {
-    setScanToast({ message, type });
-    setTimeout(() => {
-      setScanToast(null);
-    }, 3000);
-  };
 
   // Switch counter
   const handleSelectCounter = (name: string) => {
@@ -368,6 +364,9 @@ export default function App() {
   };
 
   const khataActiveCount = syncEngine.getKhataAccountsWithBalanceCount();
+  const criticalStockCount = useMemo(() => {
+    return medicines.filter((m) => m.currentStockPacks <= (m.minThresholdPacks || 5)).length;
+  }, [medicines]);
 
   const getPageTitle = (tab: string) => {
     switch (tab) {
@@ -377,6 +376,8 @@ export default function App() {
         return 'Point of sale';
       case 'inventory':
         return 'Medicine stock';
+      case 'critical_stock':
+        return 'Critical Stock Alerts';
       case 'khata':
         return 'Credit khata';
       case 'reports':
@@ -560,6 +561,28 @@ export default function App() {
                   <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
                     ^I
                   </kbd>
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleNavigateTab('critical_stock');
+                  }}
+                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                    activeTab === 'critical_stock'
+                      ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
+                      : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
+                  }`}
+                  title="Critical stock alerts & reorder list"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <ShieldAlert className="w-4 h-4 text-rose-400" />
+                    <span>Critical stock</span>
+                  </div>
+                  {criticalStockCount > 0 && (
+                    <span className="bg-rose-500 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                      {criticalStockCount}
+                    </span>
+                  )}
                 </button>
 
                 <button
@@ -820,6 +843,17 @@ export default function App() {
               onOpenPrintLabel={(med) => {
                 setMedicineForLabel(med);
                 setIsPrintLabelOpen(true);
+              }}
+              canEdit={currentUser.role === 'owner' || currentUser.role === 'pharmacist'}
+            />
+          )}
+
+          {activeTab === 'critical_stock' && (
+            <CriticalStockView
+              medicines={medicines}
+              onOpenMedicineModal={(med) => {
+                setSelectedMedicineForEdit(med || null);
+                setIsMedicineModalOpen(true);
               }}
               canEdit={currentUser.role === 'owner' || currentUser.role === 'pharmacist'}
             />

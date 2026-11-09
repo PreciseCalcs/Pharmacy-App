@@ -565,10 +565,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
 
             <button
-              onClick={() => onNavigateTab('inventory')}
+              onClick={() => onNavigateTab('critical_stock')}
               className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+              title="Open dedicated Critical Stock & Reorder Export Workspace"
             >
-              <span>Stock Register</span>
+              <span>Reorder Workspace</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>

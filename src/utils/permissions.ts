@@ -85,10 +85,10 @@ export function can(role: UserRole, action: keyof RoleDetail['permissions']): bo
 export function canOpenTab(role: UserRole, tab: string): boolean {
   if (role === 'owner') return true;
   if (role === 'pharmacist') {
-    return ['overview', 'dashboard', 'pos', 'inventory', 'khata', 'reports'].includes(tab);
+    return ['overview', 'dashboard', 'pos', 'inventory', 'critical_stock', 'khata', 'reports'].includes(tab);
   }
   if (role === 'cashier') {
-    return ['overview', 'dashboard', 'pos', 'inventory', 'khata'].includes(tab);
+    return ['overview', 'dashboard', 'pos', 'inventory', 'critical_stock', 'khata'].includes(tab);
   }
   return false;
 }
