@@ -32,6 +32,7 @@ import {
   parseMedicineExcelFile 
 } from '../services/excelExporter';
 import { soundService } from '../services/soundAlerts';
+import { syncEngine } from '../services/syncEngine';
 
 interface SpreadsheetViewProps {
   medicines: MedicineItem[];
@@ -182,11 +183,11 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
     setIsImporting(true);
     try {
       const items = await parseMedicineExcelFile(file);
-      for (const item of items) {
-        await onUpdateMedicine(item.sku || `SKU-${Date.now()}`, item);
-      }
+      const { added, updated } = await syncEngine.bulkUpsertMedicines(items);
       soundService.cashRegister();
-      alert(`Imported ${items.length} medicines into the catalog.`);
+      alert(
+        `Import complete: ${added} new items added, ${updated} existing items updated.`
+      );
     } catch (err: any) {
       soundService.errorTone();
       alert(`Failed to import file: ${err?.message || 'Invalid Excel format'}`);

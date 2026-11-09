@@ -1,38 +1,43 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { 
-  ShoppingCart, 
-  Trash2, 
-  Plus, 
-  Minus, 
-  CheckCircle2, 
-  Receipt, 
-  Search, 
-  CreditCard, 
-  Banknote, 
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  ShoppingCart,
+  Trash2,
+  Plus,
+  Minus,
+  CheckCircle2,
+  Receipt,
+  Search,
+  CreditCard,
+  Banknote,
   Smartphone,
   Camera,
   AlertCircle,
   Percent,
   Sparkles,
   Layers,
-  ArrowRight,
   Users,
   Heart,
   Baby,
   ShoppingBag,
   Pill,
   Image as ImageIcon,
-  Package
 } from 'lucide-react';
-import { 
-  DosageForm, 
-  MedicineItem, 
-  PaymentMethod, 
-  SaleItem, 
-  SaleTransaction, 
-  UserAccount 
+import {
+  MedicineItem,
+  PaymentMethod,
+  SaleItem,
+  SaleTransaction,
+  UserAccount,
 } from '../types/pharmacy';
-import { formatPKR, getPieceRetailPrice, getPieceUnitName, getTotalPiecesInStock } from '../utils/pharmacyHelpers';
+import {
+  formatPKR,
+  getPieceRetailPrice,
+  getPieceUnitName,
+  getTotalPiecesInStock,
+  getUnitsPerPack,
+  isExpired,
+} from '../utils/pharmacyHelpers';
+import { parseScannedCode } from '../utils/codeParser';
 import { soundService } from '../services/soundAlerts';
 import { syncEngine } from '../services/syncEngine';
 
@@ -54,6 +59,9 @@ interface PosViewProps {
   }) => Promise<SaleTransaction>;
   onOpenScanner: () => void;
   onSaleCompleted: (txn: SaleTransaction) => void;
+  externalScannedItem?: { medicine: MedicineItem; scanId: number } | null;
+  onExternalScanConsumed?: () => void;
+  onUnrecognizedBarcode?: (code: string) => void;
 }
 
 export const PosView: React.FC<PosViewProps> = ({
@@ -62,6 +70,9 @@ export const PosView: React.FC<PosViewProps> = ({
   onProcessSale,
   onOpenScanner,
   onSaleCompleted,
+  externalScannedItem,
+  onExternalScanConsumed,
+  onUnrecognizedBarcode,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [posDepartment, setPosDepartment] = useState<string>('all');
@@ -92,32 +103,170 @@ export const PosView: React.FC<PosViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Available medicines for fast catalog select
+  /**
+   * Helper: Total pieces already in cart for a specific medicine
+   * (Accounts for both 'pack' and 'loose' rows of the same medicine)
+   */
+  const getCartPiecesForMedicine = (
+    cartItems: SaleItem[],
+    medId: string,
+    excludeIndex = -1
+  ): number => {
+    return cartItems.reduce((sum, item, idx) => {
+      if (idx === excludeIndex || item.medicineId !== medId) return sum;
+      const unitsPerPack = Math.max(1, item.unitsPerPack || 1);
+      return (
+        sum + (item.unitType === 'pack' ? item.quantity * unitsPerPack : item.quantity)
+      );
+    }, 0);
+  };
+
+  const addToCart = useCallback(
+    (med: MedicineItem, unitType: 'pack' | 'loose' = 'pack') => {
+      setErrorNotice(null);
+
+      // 1. Block expired medicines immediately
+      if (isExpired(med.expiryDate)) {
+        soundService.errorTone();
+        setErrorNotice(
+          `Cannot dispense expired medicine: ${med.name} (Expired: ${med.expiryDate})`
+        );
+        return;
+      }
+
+      const unitsPerPack = getUnitsPerPack(med);
+      const addedPieces = unitType === 'pack' ? unitsPerPack : 1;
+      const availablePieces = getTotalPiecesInStock(med);
+
+      let stockError: string | null = null;
+
+      setCart((prevCart) => {
+        const currentCartPieces = getCartPiecesForMedicine(prevCart, med.id);
+        if (currentCartPieces + addedPieces > availablePieces) {
+          stockError = `Insufficient stock for ${med.name}. Only ${med.currentStockPacks} packs (${availablePieces} total units) available.`;
+          return prevCart;
+        }
+
+        const existingIndex = prevCart.findIndex(
+          (item) => item.medicineId === med.id && item.unitType === unitType
+        );
+
+        const price =
+          unitType === 'pack' ? med.unitRetailPrice : getPieceRetailPrice(med);
+        const cost =
+          unitType === 'pack'
+            ? med.unitCostPrice
+            : med.looseCostPrice ||
+              Number((med.unitCostPrice / unitsPerPack).toFixed(2));
+
+        if (existingIndex > -1) {
+          const updated = [...prevCart];
+          const nextQty = updated[existingIndex].quantity + 1;
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            quantity: nextQty,
+            subtotal: Number((nextQty * price).toFixed(2)),
+            profit: Number(((price - cost) * nextQty).toFixed(2)),
+          };
+          return updated;
+        } else {
+          const newItem: SaleItem = {
+            medicineId: med.id,
+            medicineName: med.name,
+            genericName: med.genericName,
+            dosageForm: med.dosageForm,
+            unitType,
+            unitsPerPack,
+            quantity: 1,
+            pricePerUnit: price,
+            costPerUnit: cost,
+            subtotal: price,
+            profit: Number((price - cost).toFixed(2)),
+            batchNumber: med.batchNumber,
+            expiryDate: med.expiryDate,
+          };
+          return [...prevCart, newItem];
+        }
+      });
+
+      if (stockError) {
+        soundService.errorTone();
+        setErrorNotice(stockError);
+      } else {
+        soundService.click();
+      }
+    },
+    []
+  );
+
+  // Consume external hardware gun or camera barcode scans
+  useEffect(() => {
+    if (externalScannedItem) {
+      addToCart(externalScannedItem.medicine, 'pack');
+      onExternalScanConsumed?.();
+    }
+  }, [externalScannedItem, addToCart, onExternalScanConsumed]);
+
+  // Handle Enter key inside the POS search box (for barcode guns or fast Enter dispensing)
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && searchQuery.trim()) {
+      e.preventDefault();
+      const raw = searchQuery.trim();
+      const parsed = parseScannedCode(raw, medicines);
+
+      if (parsed.matchedMedicine) {
+        addToCart(parsed.matchedMedicine, 'pack');
+        setSearchQuery('');
+        return;
+      }
+
+      if (availableMedicines.length === 1) {
+        addToCart(availableMedicines[0], 'pack');
+        setSearchQuery('');
+        return;
+      }
+
+      if (/^\d{6,14}$/.test(raw) && onUnrecognizedBarcode) {
+        setSearchQuery('');
+        onUnrecognizedBarcode(raw);
+      }
+    }
+  };
+
+  // Available medicines for fast catalog select (excludes out-of-stock and expired items)
   const availableMedicines = medicines.filter((m) => {
     const totalPieces = getTotalPiecesInStock(m);
     if (totalPieces <= 0) return false;
+    if (isExpired(m.expiryDate)) return false;
 
     // Department filtering
     if (posDepartment !== 'all') {
       if (posDepartment === 'personal_care') {
-        const match = m.department === 'personal_care' || 
-          m.category === 'Personal Care & Sexual Wellness' || 
-          m.category === 'Feminine Hygiene & Care' || 
+        const match =
+          m.department === 'personal_care' ||
+          m.category === 'Personal Care & Sexual Wellness' ||
+          m.category === 'Feminine Hygiene & Care' ||
           m.category === 'Personal Hygiene & Grooming';
         if (!match) return false;
       } else if (posDepartment === 'mother_baby') {
-        const match = m.department === 'mother_baby' || m.category === 'Baby & Mother Care';
+        const match =
+          m.department === 'mother_baby' || m.category === 'Baby & Mother Care';
         if (!match) return false;
       } else if (posDepartment === 'general_store') {
-        const match = m.department === 'general_store' || m.category === 'General Store & FMCG';
+        const match =
+          m.department === 'general_store' ||
+          m.category === 'General Store & FMCG';
         if (!match) return false;
       } else if (posDepartment === 'surgical') {
-        const match = m.department === 'surgical' || m.category === 'Medical Devices & Surgical';
+        const match =
+          m.department === 'surgical' ||
+          m.category === 'Medical Devices & Surgical';
         if (!match) return false;
       } else if (posDepartment === 'pharmacy') {
-        const isOther = m.department === 'personal_care' || 
-          m.department === 'mother_baby' || 
-          m.department === 'general_store' || 
+        const isOther =
+          m.department === 'personal_care' ||
+          m.department === 'mother_baby' ||
+          m.department === 'general_store' ||
           m.department === 'surgical' ||
           m.category === 'Personal Care & Sexual Wellness' ||
           m.category === 'Baby & Mother Care' ||
@@ -138,85 +287,99 @@ export const PosView: React.FC<PosViewProps> = ({
     );
   });
 
-  const addToCart = (med: MedicineItem, unitType: 'pack' | 'loose' = 'pack') => {
-    setErrorNotice(null);
-    const existingIndex = cart.findIndex(
-      (item) => item.medicineId === med.id && item.unitType === unitType
-    );
-
-    const price = unitType === 'pack' ? med.unitRetailPrice : getPieceRetailPrice(med);
-    const cost = unitType === 'pack' ? med.unitCostPrice : (med.looseCostPrice || Number((med.unitCostPrice / (med.unitsPerPack || 1)).toFixed(2)));
-
-    if (existingIndex > -1) {
-      const updated = [...cart];
-      updated[existingIndex].quantity += 1;
-      updated[existingIndex].subtotal = Number((updated[existingIndex].quantity * price).toFixed(2));
-      updated[existingIndex].profit = Number(((price - cost) * updated[existingIndex].quantity).toFixed(2));
-      setCart(updated);
-    } else {
-      const newItem: SaleItem = {
-        medicineId: med.id,
-        medicineName: med.name,
-        genericName: med.genericName,
-        dosageForm: med.dosageForm,
-        unitType,
-        unitsPerPack: med.unitsPerPack || 1,
-        quantity: 1,
-        pricePerUnit: price,
-        costPerUnit: cost,
-        subtotal: price,
-        profit: Number((price - cost).toFixed(2)),
-        batchNumber: med.batchNumber,
-        expiryDate: med.expiryDate,
-      };
-      setCart([...cart, newItem]);
-    }
-    soundService.click();
-  };
-
   const updateQuantity = (index: number, newQty: number) => {
+    setErrorNotice(null);
     if (newQty <= 0) {
       removeFromCart(index);
       return;
     }
+
+    const item = cart[index];
+    const med = medicines.find((m) => m.id === item.medicineId);
+    if (med) {
+      const unitsPerPack = getUnitsPerPack(med);
+      const otherPieces = getCartPiecesForMedicine(cart, med.id, index);
+      const requestedPieces =
+        item.unitType === 'pack' ? newQty * unitsPerPack : newQty;
+      const availablePieces = getTotalPiecesInStock(med);
+
+      if (otherPieces + requestedPieces > availablePieces) {
+        soundService.errorTone();
+        setErrorNotice(
+          `Stock limit reached for ${med.name}. Max available: ${med.currentStockPacks} packs (${availablePieces} units).`
+        );
+        return;
+      }
+    }
+
     const updated = [...cart];
-    const item = updated[index];
-    item.quantity = newQty;
-    item.subtotal = Number((newQty * item.pricePerUnit).toFixed(2));
-    item.profit = Number(((item.pricePerUnit - item.costPerUnit) * newQty).toFixed(2));
+    updated[index] = {
+      ...item,
+      quantity: newQty,
+      subtotal: Number((newQty * item.pricePerUnit).toFixed(2)),
+      profit: Number(((item.pricePerUnit - item.costPerUnit) * newQty).toFixed(2)),
+    };
     setCart(updated);
     soundService.click();
   };
 
   const toggleItemUnit = (index: number) => {
-    const updated = [...cart];
-    const item = updated[index];
+    setErrorNotice(null);
+    const item = cart[index];
     const med = medicines.find((m) => m.id === item.medicineId);
     if (!med) return;
 
-    const nextUnit: 'pack' | 'loose' = item.unitType === 'pack' ? 'loose' : 'pack';
-    const price = nextUnit === 'pack' ? med.unitRetailPrice : getPieceRetailPrice(med);
-    const cost = nextUnit === 'pack' ? med.unitCostPrice : (med.looseCostPrice || Number((med.unitCostPrice / (med.unitsPerPack || 1)).toFixed(2)));
+    const nextUnit: 'pack' | 'loose' =
+      item.unitType === 'pack' ? 'loose' : 'pack';
+    const unitsPerPack = getUnitsPerPack(med);
+    const otherPieces = getCartPiecesForMedicine(cart, med.id, index);
+    const requestedPieces =
+      nextUnit === 'pack' ? item.quantity * unitsPerPack : item.quantity;
+    const availablePieces = getTotalPiecesInStock(med);
 
-    item.unitType = nextUnit;
-    item.pricePerUnit = price;
-    item.costPerUnit = cost;
-    item.subtotal = Number((item.quantity * price).toFixed(2));
-    item.profit = Number(((price - cost) * item.quantity).toFixed(2));
+    if (otherPieces + requestedPieces > availablePieces) {
+      soundService.errorTone();
+      setErrorNotice(
+        `Cannot switch ${med.name} to ${nextUnit.toUpperCase()}: requires ${
+          otherPieces + requestedPieces
+        } units, but only ${availablePieces} in stock.`
+      );
+      return;
+    }
+
+    const price =
+      nextUnit === 'pack' ? med.unitRetailPrice : getPieceRetailPrice(med);
+    const cost =
+      nextUnit === 'pack'
+        ? med.unitCostPrice
+        : med.looseCostPrice ||
+          Number((med.unitCostPrice / unitsPerPack).toFixed(2));
+
+    const updated = [...cart];
+    updated[index] = {
+      ...item,
+      unitType: nextUnit,
+      pricePerUnit: price,
+      costPerUnit: cost,
+      subtotal: Number((item.quantity * price).toFixed(2)),
+      profit: Number(((price - cost) * item.quantity).toFixed(2)),
+    };
     setCart(updated);
     soundService.click();
   };
 
   const removeFromCart = (index: number) => {
+    setErrorNotice(null);
     setCart(cart.filter((_, i) => i !== index));
     soundService.click();
   };
 
   const clearCart = () => {
+    setErrorNotice(null);
     setCart([]);
   };
 
-  const handleSelectKhataCustomer = (cust: typeof khataCustomers[0]) => {
+  const handleSelectKhataCustomer = (cust: (typeof khataCustomers)[0]) => {
     setSelectedCustomerId(cust.id);
     setCustomerName(cust.name);
     setCustomerPhone(cust.phone);
@@ -224,7 +387,9 @@ export const PosView: React.FC<PosViewProps> = ({
   };
 
   // Financial calculations
-  const subtotal = Number(cart.reduce((sum, item) => sum + item.subtotal, 0).toFixed(2));
+  const subtotal = Number(
+    cart.reduce((sum, item) => sum + item.subtotal, 0).toFixed(2)
+  );
   const discountAmount = Math.round((subtotal * discountPercent) / 100);
   const netTotal = Math.max(0, subtotal - discountAmount);
 
@@ -235,7 +400,20 @@ export const PosView: React.FC<PosViewProps> = ({
     e.preventDefault();
     if (cart.length === 0) return;
 
+    if (
+      paymentMethod === 'Credit' &&
+      (!customerName.trim() ||
+        customerName.trim().toLowerCase() === 'walk-in customer')
+    ) {
+      soundService.errorTone();
+      setErrorNotice(
+        'Please select a Khata customer or enter the customer name for Credit sales.'
+      );
+      return;
+    }
+
     setIsProcessing(true);
+    setErrorNotice(null);
     try {
       const txn = await onProcessSale({
         items: cart,
@@ -332,6 +510,7 @@ export const PosView: React.FC<PosViewProps> = ({
               placeholder="Scan Barcode gun or search brand, formula, condoms, soap, baby items... (F2)"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
               className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs sm:text-sm bg-slate-50/50 focus:bg-white transition"
               autoFocus
             />

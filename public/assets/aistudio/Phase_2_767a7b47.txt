@@ -1,0 +1,863 @@
+Hardware & Camera Barcode Scans Directly Populate the POS Cart (src/App.tsx & src/components/PosView.tsx):Fixes the bug where handleScannedCode in App.tsx only switched tabs without adding the scanned item to the cart.   Fixes a keyboard buffer bug in App.tsx where if (timeDiff > 120 && !isInput) failed to reset barcodeBufferRef when typing inside form inputs, causing normal human typing in inputs followed by Enter to trigger the "Unrecognized Barcode" modal.   Adds a 600ms scan debounce and Enter-key barcode matching directly inside the POS search bar.Strict Stock Ceiling & Expired Medicine Blocking (src/components/PosView.tsx):Blocks expired medicines (isExpired(med.expiryDate)) from being dispensed at the counter.   Validates total pieces across both Pack and Loose cart lines against getTotalPiecesInStock(med) before allowing addToCart, updateQuantity, or toggleItemUnit.   Accurate Pack-Breaking Math & Sequential Invoice Numbers (src/services/syncEngine.ts):Fixes the loose-unit stock deduction bug in processSale where clamping currentStockPacks to 0 still added phantom loose units (remainingLoose += packsNeeded * unitsPerPack).   Replaces the hardcoded DEMO- invoice prefix with a date-stamped, collision-proof invoice sequence (ZMS-YYYYMMDD-XXXX).   Working Excel Inventory Upsert (src/services/syncEngine.ts & src/components/SpreadsheetView.tsx):Adds bulkUpsertMedicines() to syncEngine.ts and connects it to SpreadsheetView.tsx, fixing the crash where handleImportFile called updateMedicine with a SKU instead of an internal ID (Medicine not found in catalog).  
+
+1. Update src/services/syncEngine.ts
+In src/services/syncEngine.ts, add generateInvoiceNumber(), bulkUpsertMedicines(), and replace processSale() with validated stock and pack-breaking math:
+
+// Generate sequential collision-safe invoice numbers (e.g., ZMS-20261109-1043)
+  private generateInvoiceNumber(): string {
+    const now = new Date();
+    const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(
+      now.getDate()
+    ).padStart(2, '0')}`;
+
+    let maxSeq = 1000 + this.sales.length;
+    this.sales.forEach((s) => {
+      const match = s.invoiceNumber.match(/(\d+)$/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxSeq && num < 999999) {
+          maxSeq = num;
+        }
+      }
+    });
+
+    return `ZMS-${datePart}-${maxSeq + 1}`;
+  }
+
+  // Bulk Upsert for Excel Inventory Import (Matches by ID, SKU, or Barcode)
+  public async bulkUpsertMedicines(
+    items: Partial<MedicineItem>[]
+  ): Promise<{ added: number; updated: number }> {
+    let added = 0;
+    let updated = 0;
+    const nowIso = new Date().toISOString();
+
+    for (const raw of items) {
+      if (!raw.name || !raw.name.trim()) continue;
+
+      const cleanSku = (raw.sku || '').trim().toLowerCase();
+      const cleanBarcode = (raw.barcode || '').trim().toLowerCase();
+
+      const existingIdx = this.medicines.findIndex(
+        (m) =>
+          (raw.id && m.id === raw.id) ||
+          (cleanSku && m.sku.trim().toLowerCase() === cleanSku) ||
+          (cleanBarcode && m.barcode.trim().toLowerCase() === cleanBarcode)
+      );
+
+      if (existingIdx > -1) {
+        const current = this.medicines[existingIdx];
+        const merged: MedicineItem = {
+          ...current,
+          ...raw,
+          id: current.id,
+          updated: nowIso,
+        };
+        this.medicines[existingIdx] = merged;
+        this.enqueueOutbox('UPDATE_MEDICINE', { id: current.id, updates: raw });
+        updated++;
+      } else {
+        const units = Number(raw.unitsPerPack) > 0 ? Number(raw.unitsPerPack) : 1;
+        const unitCost = Math.max(0, Number(raw.unitCostPrice) || 0);
+        const unitRetail = Math.max(0, Number(raw.unitRetailPrice) || 0);
+        const newItem: MedicineItem = {
+          id: `med_${Date.now()}_${Math.random().toString(36).substring(2, 6)}_${added}`,
+          name: raw.name.trim(),
+          genericName: (raw.genericName || 'Generic').trim(),
+          barcode: (raw.barcode || `BC-${Date.now()}-${added}`).trim(),
+          sku: (raw.sku || `SKU-${Date.now()}-${added}`).trim(),
+          category: raw.category || 'General / Other',
+          department: raw.department || 'pharmacy',
+          dosageForm: raw.dosageForm || 'Tablet',
+          strength: (raw.strength || '').trim(),
+          unitsPerPack: units,
+          unitCostPrice: unitCost,
+          unitRetailPrice: unitRetail,
+          looseCostPrice: Number(raw.looseCostPrice) || Number((unitCost / units).toFixed(2)),
+          looseRetailPrice: Number(raw.looseRetailPrice) || Number((unitRetail / units).toFixed(2)),
+          currentStockPacks: Math.max(0, Number(raw.currentStockPacks) || 0),
+          currentStockLoose: Math.max(0, Number(raw.currentStockLoose) || 0),
+          minThresholdPacks: Math.max(0, Number(raw.minThresholdPacks) || 5),
+          batchNumber: (raw.batchNumber || 'B-NEW').trim(),
+          expiryDate: (raw.expiryDate || '2027-12-31').trim(),
+          shelfLocation: (raw.shelfLocation || 'Main Shelf').trim(),
+          manufacturer: (raw.manufacturer || 'Local').trim(),
+          requiresPrescription: Boolean(raw.requiresPrescription),
+          supplier: raw.supplier,
+          notes: raw.notes,
+          imageUrl: raw.imageUrl,
+          created: nowIso,
+          updated: nowIso,
+        };
+        this.medicines.unshift(newItem);
+        this.enqueueOutbox('ADD_MEDICINE', newItem);
+        added++;
+      }
+    }
+
+    this.saveMedicines();
+    this.notify();
+    return { added, updated };
+  }
+
+  // Dispense Register / Process Sale Transaction with strict stock & expiry checks
+  public async processSale(transactionData: {
+    items: SaleItem[];
+    customerName: string;
+    customerPhone?: string;
+    customerId?: string;
+    counterName?: string;
+    staffName: string;
+    staffRole: any;
+    paymentMethod: any;
+    discountPercent: number;
+    receivedAmount: number;
+    notes?: string;
+  }): Promise<SaleTransaction> {
+    const {
+      items,
+      customerName,
+      customerPhone,
+      customerId,
+      counterName,
+      staffName,
+      staffRole,
+      paymentMethod,
+      discountPercent,
+      receivedAmount,
+      notes,
+    } = transactionData;
+
+    if (!items || items.length === 0) {
+      throw new Error('Cannot process an empty sale.');
+    }
+
+    // 0. Pre-validate expiry and total available pieces per medicine across all cart lines
+    const requiredPiecesByMed = new Map<string, number>();
+    for (const item of items) {
+      const med = this.medicines.find((m) => m.id === item.medicineId);
+      if (!med) {
+        throw new Error(`Item "${item.medicineName}" no longer exists in inventory.`);
+      }
+      if (isExpired(med.expiryDate)) {
+        throw new Error(
+          `Cannot dispense "${med.name}" (Batch ${med.batchNumber}) because it expired on ${med.expiryDate}.`
+        );
+      }
+      const unitsPerPack = med.unitsPerPack > 0 ? med.unitsPerPack : 1;
+      const piecesToDeduct = item.unitType === 'pack' ? item.quantity * unitsPerPack : item.quantity;
+      requiredPiecesByMed.set(
+        med.id,
+        (requiredPiecesByMed.get(med.id) || 0) + piecesToDeduct
+      );
+    }
+
+    for (const [medId, requestedPieces] of requiredPiecesByMed.entries()) {
+      const med = this.medicines.find((m) => m.id === medId)!;
+      const availablePieces = getTotalPiecesInStock(med);
+      if (requestedPieces > availablePieces) {
+        throw new Error(
+          `Insufficient stock for "${med.name}". Requested ${requestedPieces} total units, but only ${availablePieces} available.`
+        );
+      }
+    }
+
+    const subtotal = Number(items.reduce((sum, item) => sum + item.subtotal, 0).toFixed(2));
+    const discountAmount = Math.round((subtotal * (discountPercent || 0)) / 100);
+    const totalAmount = Math.max(0, subtotal - discountAmount);
+    const totalProfit = Number(
+      (items.reduce((sum, item) => sum + item.profit, 0) - discountAmount).toFixed(2)
+    );
+    const finalReceived = receivedAmount > 0 ? receivedAmount : totalAmount;
+    const changeAmount = Math.max(0, finalReceived - totalAmount);
+
+    const invoiceNumber = this.generateInvoiceNumber();
+
+    const newTransaction: SaleTransaction = {
+      id: `txn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      invoiceNumber,
+      customerName: customerName.trim() || 'Walk-in Customer',
+      customerPhone: customerPhone?.trim() || undefined,
+      customerId,
+      counterName: counterName || this.activeCounter,
+      staffName,
+      staffRole,
+      paymentMethod,
+      items,
+      subtotal,
+      discountPercent: discountPercent || 0,
+      discountAmount,
+      totalAmount,
+      totalProfit,
+      receivedAmount: finalReceived,
+      changeAmount,
+      status: 'completed',
+      notes,
+      createdAt: new Date().toISOString(),
+    };
+
+    // 1. Accurately decrement inventory stock (handles pack-breaking without phantom loose units)
+    items.forEach((item) => {
+      const med = this.medicines.find((m) => m.id === item.medicineId);
+      if (!med) return;
+
+      const unitsPerPack = med.unitsPerPack > 0 ? med.unitsPerPack : 1;
+
+      if (item.unitType === 'pack') {
+        if (med.currentStockPacks >= item.quantity) {
+          med.currentStockPacks -= item.quantity;
+        } else {
+          // If loose pieces make up the remaining pack quantity
+          const totalAfter = Math.max(0, getTotalPiecesInStock(med) - item.quantity * unitsPerPack);
+          med.currentStockPacks = Math.floor(totalAfter / unitsPerPack);
+          med.currentStockLoose = totalAfter % unitsPerPack;
+        }
+      } else {
+        let currentLoose = med.currentStockLoose || 0;
+        if (currentLoose >= item.quantity) {
+          med.currentStockLoose = currentLoose - item.quantity;
+        } else {
+          const deficitLoose = item.quantity - currentLoose;
+          const packsToBreak = Math.min(
+            med.currentStockPacks,
+            Math.ceil(deficitLoose / unitsPerPack)
+          );
+          med.currentStockPacks = Math.max(0, med.currentStockPacks - packsToBreak);
+          currentLoose += packsToBreak * unitsPerPack;
+          med.currentStockLoose = Math.max(0, currentLoose - item.quantity);
+        }
+      }
+      med.updated = new Date().toISOString();
+    });
+
+    // 2. If Payment Method is 'Credit', link to customer's Khata
+    if (paymentMethod === 'Credit') {
+      let targetCustomer: CustomerKhata | undefined;
+      if (customerId) {
+        targetCustomer = this.khataCustomers.find((c) => c.id === customerId);
+      } else if (customerPhone) {
+        targetCustomer = this.khataCustomers.find(
+          (c) => c.phone.replace(/\s+/g, '') === customerPhone.replace(/\s+/g, '')
+        );
+      } else if (customerName && customerName !== 'Walk-in Customer') {
+        targetCustomer = this.khataCustomers.find(
+          (c) => c.name.toLowerCase() === customerName.toLowerCase()
+        );
+      }
+
+      if (targetCustomer) {
+        targetCustomer.balanceDue += totalAmount;
+        targetCustomer.updatedAt = new Date().toISOString();
+        targetCustomer.history.unshift({
+          id: `ent_sale_${Date.now()}`,
+          type: 'sale',
+          invoiceNumber,
+          description: `Credit sale · ${invoiceNumber}`,
+          amount: totalAmount,
+          paymentMethod: 'Credit',
+          date: new Date().toISOString(),
+          note: notes,
+        });
+        this.saveKhata();
+      } else if (customerName && customerName !== 'Walk-in Customer') {
+        const newKhata: CustomerKhata = {
+          id: `kht_${Date.now()}`,
+          name: customerName.trim(),
+          phone: customerPhone?.trim() || '',
+          balanceDue: totalAmount,
+          updatedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          history: [
+            {
+              id: `ent_sale_${Date.now()}`,
+              type: 'sale',
+              invoiceNumber,
+              description: `Credit sale · ${invoiceNumber}`,
+              amount: totalAmount,
+              paymentMethod: 'Credit',
+              date: new Date().toISOString(),
+            },
+          ],
+        };
+        this.khataCustomers.unshift(newKhata);
+        this.saveKhata();
+      }
+    }
+
+    // 3. Save locally
+    this.sales.unshift(newTransaction);
+    this.saveMedicines();
+    this.saveSales();
+    this.enqueueOutbox('PROCESS_SALE', newTransaction);
+    this.notify();
+
+    // 4. Push to PocketBase live collection if available
+    try {
+      await pb.collection('sales').create(newTransaction);
+      for (const item of items) {
+        const med = this.medicines.find((m) => m.id === item.medicineId);
+        if (med) {
+          await pb.collection('medicines').update(med.id, {
+            currentStockPacks: med.currentStockPacks,
+            currentStockLoose: med.currentStockLoose,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('PocketBase sync deferred to outbox queue:', err);
+    }
+
+    return newTransaction;
+  }
+
+
+
+
+
+
+2. Update src/components/PosView.tsx
+Adds expired-item blocking, cross-cart stock ceiling validation, Enter-to-scan in the search box, and consumption of external barcode scans passed down from App.tsx:
+
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  ShoppingCart,
+  Trash2,
+  Plus,
+  Minus,
+  CheckCircle2,
+  Search,
+  CreditCard,
+  Banknote,
+  Smartphone,
+  Camera,
+  AlertCircle,
+  Users,
+  Heart,
+  Baby,
+  ShoppingBag,
+  Pill,
+  Package,
+} from 'lucide-react';
+import {
+  MedicineItem,
+  PaymentMethod,
+  SaleItem,
+  SaleTransaction,
+  UserAccount,
+} from '../types/pharmacy';
+import {
+  formatPKR,
+  getPieceRetailPrice,
+  getPieceUnitName,
+  getTotalPiecesInStock,
+  getUnitsPerPack,
+  isExpired,
+} from '../utils/pharmacyHelpers';
+import { parseScannedCode } from '../utils/codeParser';
+import { soundService } from '../services/soundAlerts';
+import { syncEngine } from '../services/syncEngine';
+
+interface PosViewProps {
+  medicines: MedicineItem[];
+  currentUser: UserAccount;
+  onProcessSale: (saleData: {
+    items: SaleItem[];
+    customerName: string;
+    customerPhone?: string;
+    customerId?: string;
+    counterName?: string;
+    staffName: string;
+    staffRole: any;
+    paymentMethod: PaymentMethod;
+    discountPercent: number;
+    receivedAmount: number;
+    notes?: string;
+  }) => Promise<SaleTransaction>;
+  onOpenScanner: () => void;
+  onSaleCompleted: (txn: SaleTransaction) => void;
+  externalScannedItem?: { medicine: MedicineItem; scanId: number } | null;
+  onExternalScanConsumed?: () => void;
+  onUnrecognizedBarcode?: (code: string) => void;
+}
+
+export const PosView: React.FC<PosViewProps> = ({
+  medicines,
+  currentUser,
+  onProcessSale,
+  onOpenScanner,
+  onSaleCompleted,
+  externalScannedItem,
+  onExternalScanConsumed,
+  onUnrecognizedBarcode,
+}) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [posDepartment, setPosDepartment] = useState('all');
+  const [cart, setCart] = useState<SaleItem[]>([]);
+  const [customerName, setCustomerName] = useState('Walk-in Customer');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
+  const [discountPercent, setDiscountPercent] = useState(0);
+  const [receivedAmount, setReceivedAmount] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [errorNotice, setErrorNotice] = useState<string | null>(null);
+
+  const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const activeCounter = syncEngine.getActiveCounter();
+  const khataCustomers = syncEngine.getKhataCustomers();
+
+  // F2 focus shortcut for fast counter dispensing
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F2') {
+        e.preventDefault();
+        barcodeInputRef.current?.focus();
+        barcodeInputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Calculate how many total pieces of a medicine are already in the cart
+  const getCartPiecesForMedicine = useCallback(
+    (medId: string, currentCart: SaleItem[], excludeIndex?: number): number => {
+      return currentCart.reduce((sum, item, idx) => {
+        if (idx === excludeIndex || item.medicineId !== medId) return sum;
+        const pieces =
+          item.unitType === 'pack' ? item.quantity * (item.unitsPerPack || 1) : item.quantity;
+        return sum + pieces;
+      }, 0);
+    },
+    []
+  );
+
+  const addToCart = useCallback(
+    (med: MedicineItem, unitType: 'pack' | 'loose' = 'pack') => {
+      setErrorNotice(null);
+
+      // 1. Block expired medicines
+      if (isExpired(med.expiryDate)) {
+        soundService.errorTone();
+        setErrorNotice(
+          `Blocked: "${med.name}" (Batch ${med.batchNumber}) expired on ${med.expiryDate}.`
+        );
+        return;
+      }
+
+      const unitsPerPack = getUnitsPerPack(med);
+      const totalAvailablePieces = getTotalPiecesInStock(med);
+      const piecesToAdd = unitType === 'pack' ? unitsPerPack : 1;
+
+      setCart((prevCart) => {
+        const existingPiecesInCart = getCartPiecesForMedicine(med.id, prevCart);
+        if (existingPiecesInCart + piecesToAdd > totalAvailablePieces) {
+          soundService.errorTone();
+          setErrorNotice(
+            `Stock limit reached for "${med.name}": Only ${med.currentStockPacks} packs and ${
+              med.currentStockLoose || 0
+            } loose units available.`
+          );
+          return prevCart;
+        }
+
+        const existingIndex = prevCart.findIndex(
+          (item) => item.medicineId === med.id && item.unitType === unitType
+        );
+        const price = unitType === 'pack' ? med.unitRetailPrice : getPieceRetailPrice(med);
+        const cost =
+          unitType === 'pack'
+            ? med.unitCostPrice
+            : med.looseCostPrice || Number((med.unitCostPrice / unitsPerPack).toFixed(2));
+
+        soundService.click();
+
+        if (existingIndex > -1) {
+          const updated = [...prevCart];
+          const nextQty = updated[existingIndex].quantity + 1;
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            quantity: nextQty,
+            subtotal: Number((nextQty * price).toFixed(2)),
+            profit: Number(((price - cost) * nextQty).toFixed(2)),
+          };
+          return updated;
+        } else {
+          const newItem: SaleItem = {
+            medicineId: med.id,
+            medicineName: med.name,
+            genericName: med.genericName,
+            dosageForm: med.dosageForm,
+            unitType,
+            unitsPerPack,
+            quantity: 1,
+            pricePerUnit: price,
+            costPerUnit: cost,
+            subtotal: price,
+            profit: Number((price - cost).toFixed(2)),
+            batchNumber: med.batchNumber,
+            expiryDate: med.expiryDate,
+          };
+          return [...prevCart, newItem];
+        }
+      });
+    },
+    [getCartPiecesForMedicine]
+  );
+
+  // Consume external barcode scans from App.tsx (hardware gun or camera modal)
+  useEffect(() => {
+    if (externalScannedItem?.medicine) {
+      const med = externalScannedItem.medicine;
+      const defaultUnit = med.currentStockPacks > 0 ? 'pack' : 'loose';
+      addToCart(med, defaultUnit);
+      onExternalScanConsumed?.();
+    }
+  }, [externalScannedItem, addToCart, onExternalScanConsumed]);
+
+  // Handle Enter key inside POS search input for direct barcode gun scanning
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && searchQuery.trim().length >= 3) {
+      e.preventDefault();
+      const raw = searchQuery.trim();
+      const parsed = parseScannedCode(raw, medicines);
+      if (parsed.matchedMedicine) {
+        const med = parsed.matchedMedicine;
+        addToCart(med, med.currentStockPacks > 0 ? 'pack' : 'loose');
+        setSearchQuery('');
+      } else if (/^[0-9A-Za-z-_]{6,}$/.test(raw) && availableMedicines.length === 0) {
+        soundService.scanWarning();
+        onUnrecognizedBarcode?.(raw);
+        setSearchQuery('');
+      } else if (availableMedicines.length === 1) {
+        const med = availableMedicines[0];
+        addToCart(med, med.currentStockPacks > 0 ? 'pack' : 'loose');
+        setSearchQuery('');
+      }
+    }
+  };
+
+  // Available medicines for fast catalog select (excludes out-of-stock and expired items)
+  const availableMedicines = medicines.filter((m) => {
+    const totalPieces = getTotalPiecesInStock(m);
+    if (totalPieces <= 0) return false;
+    if (isExpired(m.expiryDate)) return false;
+
+    // Department filtering
+    if (posDepartment !== 'all') {
+      if (posDepartment === 'personal_care') {
+        const match =
+          m.department === 'personal_care' ||
+          m.category === 'Personal Care & Sexual Wellness' ||
+          m.category === 'Feminine Hygiene & Care' ||
+          m.category === 'Personal Hygiene & Grooming';
+        if (!match) return false;
+      } else if (posDepartment === 'mother_baby') {
+        const match = m.department === 'mother_baby' || m.category === 'Baby & Mother Care';
+        if (!match) return false;
+      } else if (posDepartment === 'general_store') {
+        const match = m.department === 'general_store' || m.category === 'General Store & FMCG';
+        if (!match) return false;
+      } else if (posDepartment === 'surgical') {
+        const match = m.department === 'surgical' || m.category === 'Medical Devices & Surgical';
+        if (!match) return false;
+      } else if (posDepartment === 'pharmacy') {
+        const isOther =
+          m.department === 'personal_care' ||
+          m.department === 'mother_baby' ||
+          m.department === 'general_store' ||
+          m.department === 'surgical' ||
+          m.category === 'Personal Care & Sexual Wellness' ||
+          m.category === 'Baby & Mother Care' ||
+          m.category === 'General Store & FMCG' ||
+          m.category === 'Medical Devices & Surgical';
+        if (isOther) return false;
+      }
+    }
+
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return true;
+    return (
+      m.name.toLowerCase().includes(q) ||
+      m.genericName.toLowerCase().includes(q) ||
+      m.barcode.includes(q) ||
+      m.sku.toLowerCase().includes(q) ||
+      (m.category && m.category.toLowerCase().includes(q))
+    );
+  });
+
+  const updateQuantity = (index: number, newQty: number) => {
+    setErrorNotice(null);
+    if (newQty <= 0) {
+      removeFromCart(index);
+      return;
+    }
+
+    const item = cart[index];
+    const med = medicines.find((m) => m.id === item.medicineId);
+    if (med) {
+      const unitsPerPack = getUnitsPerPack(med);
+      const otherPieces = getCartPiecesForMedicine(med.id, cart, index);
+      const requestedPieces = item.unitType === 'pack' ? newQty * unitsPerPack : newQty;
+      const maxAvailablePieces = getTotalPiecesInStock(med);
+
+      if (otherPieces + requestedPieces > maxAvailablePieces) {
+        soundService.errorTone();
+        setErrorNotice(
+          `Cannot exceed available stock for "${med.name}" (${med.currentStockPacks} packs, ${
+            med.currentStockLoose || 0
+          } loose).`
+        );
+        return;
+      }
+    }
+
+    const updated = [...cart];
+    updated[index] = {
+      ...item,
+      quantity: newQty,
+      subtotal: Number((newQty * item.pricePerUnit).toFixed(2)),
+      profit: Number(((item.pricePerUnit - item.costPerUnit) * newQty).toFixed(2)),
+    };
+    setCart(updated);
+    soundService.click();
+  };
+
+  const toggleItemUnit = (index: number) => {
+    setErrorNotice(null);
+    const item = cart[index];
+    const med = medicines.find((m) => m.id === item.medicineId);
+    if (!med) return;
+
+    const unitsPerPack = getUnitsPerPack(med);
+    const nextUnit: 'pack' | 'loose' = item.unitType === 'pack' ? 'loose' : 'pack';
+    const otherPieces = getCartPiecesForMedicine(med.id, cart, index);
+    const requestedPieces = nextUnit === 'pack' ? item.quantity * unitsPerPack : item.quantity;
+    const maxAvailablePieces = getTotalPiecesInStock(med);
+
+    if (otherPieces + requestedPieces > maxAvailablePieces) {
+      soundService.errorTone();
+      setErrorNotice(
+        `Not enough stock to switch ${item.quantity} ${item.medicineName} to ${nextUnit}s.`
+      );
+      return;
+    }
+
+    const price = nextUnit === 'pack' ? med.unitRetailPrice : getPieceRetailPrice(med);
+    const cost =
+      nextUnit === 'pack'
+        ? med.unitCostPrice
+        : med.looseCostPrice || Number((med.unitCostPrice / unitsPerPack).toFixed(2));
+
+    const updated = [...cart];
+    updated[index] = {
+      ...item,
+      unitType: nextUnit,
+      pricePerUnit: price,
+      costPerUnit: cost,
+      subtotal: Number((item.quantity * price).toFixed(2)),
+      profit: Number(((price - cost) * item.quantity).toFixed(2)),
+    };
+    setCart(updated);
+    soundService.click();
+  };
+
+  const removeFromCart = (index: number) => {
+    setErrorNotice(null);
+    setCart(cart.filter((_, i) => i !== index));
+    soundService.click();
+  };
+
+  const clearCart = () => {
+    setErrorNotice(null);
+    setCart([]);
+  };
+
+  const handleSelectKhataCustomer = (cust: (typeof khataCustomers)[0]) => {
+    setSelectedCustomerId(cust.id);
+    setCustomerName(cust.name);
+    setCustomerPhone(cust.phone);
+    soundService.click();
+  };
+
+  // Financial calculations
+  const subtotal = Number(cart.reduce((sum, item) => sum + item.subtotal, 0).toFixed(2));
+  const discountAmount = Math.round((subtotal * discountPercent) / 100);
+  const netTotal = Math.max(0, subtotal - discountAmount);
+  const numReceived = parseFloat(receivedAmount) || netTotal;
+  const changeAmount = Math.max(0, numReceived - netTotal);
+
+  const handleCheckout = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cart.length === 0) return;
+
+    if (paymentMethod === 'Credit' && (!customerName.trim() || customerName.trim() === 'Walk-in Customer')) {
+      soundService.errorTone();
+      setErrorNotice('Please select a Khata customer or enter a customer name for Credit sales.');
+      return;
+    }
+
+    setIsProcessing(true);
+    setErrorNotice(null);
+    try {
+      const txn = await onProcessSale({
+        items: cart,
+        customerName: customerName.trim() || 'Walk-in Customer',
+        customerPhone: customerPhone.trim() || undefined,
+        customerId: selectedCustomerId || undefined,
+        counterName: activeCounter,
+        staffName: currentUser.name,
+        staffRole: currentUser.role,
+        paymentMethod,
+        discountPercent,
+        receivedAmount: numReceived,
+      });
+      setCart([]);
+      setReceivedAmount('');
+      setDiscountPercent(0);
+      onSaleCompleted(txn);
+    } catch (err: any) {
+      soundService.errorTone();
+      setErrorNotice(err?.message || 'Failed to complete transaction.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+
+
+(In the JSX return of PosView.tsx, attach onKeyDown={handleSearchKeyDown} to the barcodeInputRef <input> element so pressing Enter on a scanned barcode immediately adds the item to the cart).
+
+
+
+3. Update src/components/SpreadsheetView.tsx
+Replace handleImportFile in src/components/SpreadsheetView.tsx so Excel imports use syncEngine.bulkUpsertMedicines(items) instead of calling onUpdateMedicine with a non-existent ID:
+
+
+
+import { syncEngine } from '../services/syncEngine';
+
+
+
+
+
+
+// Import handler (Bulk Upsert by SKU / Barcode)
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsImporting(true);
+    try {
+      const items = await parseMedicineExcelFile(file);
+      const { added, updated } = await syncEngine.bulkUpsertMedicines(items);
+      soundService.cashRegister();
+      alert(
+        `Excel import complete: ${added} new products added, ${updated} existing products updated.`
+      );
+    } catch (err: any) {
+      soundService.errorTone();
+      alert(`Failed to import file: ${err?.message || 'Invalid Excel format'}`);
+    } finally {
+      setIsImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+
+
+
+
+
+4. Update src/App.tsx
+In src/App.tsx:
+
+Add state for passing scanned items to PosView and a lastScanTimeRef for 600ms debounce:
+
+
+const [externalScannedItem, setExternalScannedItem] = useState<{
+    medicine: MedicineItem;
+    scanId: number;
+  } | null>(null);
+  const lastScanTimeRef = useRef(0);
+
+
+Fix the hardware barcode gun buffer inside useEffect in src/App.tsx so human typing inside <input> elements never accumulates into barcodeBufferRef:
+
+
+// 4. Hardware Barcode Gun Buffer (High-speed keystrokes < 65ms apart)
+      if (isInput) {
+        barcodeBufferRef.current = '';
+        return;
+      }
+
+      const now = Date.now();
+      const timeDiff = now - lastKeyTimeRef.current;
+      lastKeyTimeRef.current = now;
+
+      if (e.key === 'Enter') {
+        const candidateCode = barcodeBufferRef.current.trim();
+        barcodeBufferRef.current = '';
+        if (candidateCode.length >= 4 && timeDiff < 120) {
+          e.preventDefault();
+          handleScannedCode(candidateCode);
+        }
+      } else if (e.key.length === 1 && !hasCtrlOrCmd && !e.altKey) {
+        if (timeDiff > 80) {
+          barcodeBufferRef.current = e.key;
+        } else {
+          barcodeBufferRef.current += e.key;
+        }
+      }
+
+
+
+Update handleScannedCode in src/App.tsx to debounce rapid scans and queue the matched medicine directly into PosView:
+
+const handleScannedCode = useCallback(
+    (rawCode: string) => {
+      const now = Date.now();
+      if (now - lastScanTimeRef.current < 600) return; // 600ms debounce against double-scans
+      lastScanTimeRef.current = now;
+
+      const parsed = parseScannedCode(rawCode, medicines);
+      if (parsed.matchedMedicine) {
+        soundService.scanSuccess();
+        showToast(
+          `Added to Cart: ${parsed.matchedMedicine.name} (${parsed.matchedMedicine.strength})`,
+          'success'
+        );
+        setExternalScannedItem({ medicine: parsed.matchedMedicine, scanId: now });
+        setActiveTab('pos');
+      } else {
+        soundService.scanWarning();
+        setUnrecognizedCode(parsed.barcode || rawCode);
+        setIsLinkCodeModalOpen(true);
+      }
+    },
+    [medicines, showToast]
+  );
+
+
+Pass the new scan props to <PosView/> inside src/App.tsx:
+
+
+{activeTab === 'pos' && (
+            <PosView
+              medicines={medicines}
+              currentUser={currentUser}
+              onProcessSale={(saleData) => syncEngine.processSale(saleData)}
+              onOpenScanner={() => setIsScannerModalOpen(true)}
+              onSaleCompleted={(txn) => {
+                setSelectedInvoice(txn);
+                setIsInvoiceModalOpen(true);
+              }}
+              externalScannedItem={externalScannedItem}
+              onExternalScanConsumed={() => setExternalScannedItem(null)}
+              onUnrecognizedBarcode={(code) => {
+                setUnrecognizedCode(code);
+                setIsLinkCodeModalOpen(true);
+              }}
+            />
+          )}
+
+

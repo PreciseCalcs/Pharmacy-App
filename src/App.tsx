@@ -89,7 +89,12 @@ export default function App() {
   // Hardware Scanner buffer
   const barcodeBufferRef = useRef<string>('');
   const lastKeyTimeRef = useRef<number>(0);
+  const lastScanTimeRef = useRef<number>(0);
   const [scanToast, setScanToast] = useState<{ message: string; type: 'success' | 'warn' } | null>(null);
+  const [externalScannedItem, setExternalScannedItem] = useState<{
+    medicine: MedicineItem;
+    scanId: number;
+  } | null>(null);
 
   // PocketBase Connection
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
@@ -160,6 +165,34 @@ export default function App() {
       clearInterval(timer);
     };
   }, [refreshHealth]);
+
+  const handleScannedCode = useCallback(
+    (rawCode: string) => {
+      const now = Date.now();
+      // 600ms debounce to prevent double-dispensing from camera or rapid gun bounce
+      if (now - lastScanTimeRef.current < 600) return;
+      lastScanTimeRef.current = now;
+
+      const parsed = parseScannedCode(rawCode, medicines);
+      if (parsed.matchedMedicine) {
+        soundService.scanSuccess();
+        showToast(
+          `Added to POS: ${parsed.matchedMedicine.name} (${parsed.matchedMedicine.strength})`,
+          'success'
+        );
+        setExternalScannedItem({
+          medicine: parsed.matchedMedicine,
+          scanId: now,
+        });
+        setActiveTab('pos');
+      } else {
+        soundService.scanWarning();
+        setUnrecognizedCode(parsed.barcode || rawCode);
+        setIsLinkCodeModalOpen(true);
+      }
+    },
+    [medicines, showToast]
+  );
 
   // Global Keyboard Shortcuts & Hardware Scanner Listener
   useEffect(() => {
@@ -297,7 +330,12 @@ export default function App() {
         setIsCounterDropdownOpen(false);
       }
 
-      // 4. Hardware Barcode Gun Buffer
+      // 4. Hardware Barcode Gun Buffer (Only when NOT typing inside an input/textarea)
+      if (isInput) {
+        barcodeBufferRef.current = '';
+        return;
+      }
+
       const now = Date.now();
       const timeDiff = now - lastKeyTimeRef.current;
       lastKeyTimeRef.current = now;
@@ -306,11 +344,12 @@ export default function App() {
         const candidateCode = barcodeBufferRef.current.trim();
         barcodeBufferRef.current = '';
 
-        if (candidateCode.length >= 4) {
+        // Hardware guns fire characters rapidly (<80ms apart) before pressing Enter
+        if (candidateCode.length >= 4 && timeDiff < 120) {
           handleScannedCode(candidateCode);
         }
       } else if (e.key.length === 1 && !hasCtrlOrCmd && !e.altKey) {
-        if (timeDiff > 120 && !isInput) {
+        if (timeDiff > 80) {
           barcodeBufferRef.current = e.key;
         } else {
           barcodeBufferRef.current += e.key;
@@ -320,20 +359,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [medicines]);
-
-  const handleScannedCode = (rawCode: string) => {
-    const parsed = parseScannedCode(rawCode, medicines);
-    if (parsed.matchedMedicine) {
-      soundService.scanSuccess();
-      showToast(`Scanned: ${parsed.matchedMedicine.name} (${parsed.matchedMedicine.strength})`, 'success');
-      setActiveTab('pos');
-    } else {
-      soundService.scanWarning();
-      setUnrecognizedCode(parsed.barcode || rawCode);
-      setIsLinkCodeModalOpen(true);
-    }
-  };
+  }, [medicines, handleScannedCode, handleNavigateTab, currentUser.role, showToast]);
 
 
   // Switch counter
@@ -826,6 +852,13 @@ export default function App() {
               onSaleCompleted={(txn) => {
                 setSelectedInvoice(txn);
                 setIsInvoiceModalOpen(true);
+              }}
+              externalScannedItem={externalScannedItem}
+              onExternalScanConsumed={() => setExternalScannedItem(null)}
+              onUnrecognizedBarcode={(code) => {
+                soundService.scanWarning();
+                setUnrecognizedCode(code);
+                setIsLinkCodeModalOpen(true);
               }}
             />
           )}

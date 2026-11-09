@@ -488,7 +488,104 @@ export class PharmacySyncEngine {
     return true;
   }
 
-  // Dispense Register / Process Sale Transaction
+  // Generate sequential collision-safe invoice numbers (e.g., ZMS-20261109-1043)
+  private generateInvoiceNumber(): string {
+    const now = new Date();
+    const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(
+      now.getDate()
+    ).padStart(2, '0')}`;
+
+    let maxSeq = 1000 + this.sales.length;
+    this.sales.forEach((s) => {
+      const match = s.invoiceNumber.match(/(\d+)$/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxSeq && num < 999999) {
+          maxSeq = num;
+        }
+      }
+    });
+
+    return `ZMS-${datePart}-${maxSeq + 1}`;
+  }
+
+  // Bulk Upsert for Excel Inventory Import (Matches by ID, SKU, or Barcode)
+  public async bulkUpsertMedicines(
+    items: Partial<MedicineItem>[]
+  ): Promise<{ added: number; updated: number }> {
+    let added = 0;
+    let updated = 0;
+    const nowIso = new Date().toISOString();
+
+    for (const raw of items) {
+      if (!raw.name || !raw.name.trim()) continue;
+
+      const cleanSku = (raw.sku || '').trim().toLowerCase();
+      const cleanBarcode = (raw.barcode || '').trim().toLowerCase();
+
+      const existingIdx = this.medicines.findIndex(
+        (m) =>
+          (raw.id && m.id === raw.id) ||
+          (cleanSku && m.sku.trim().toLowerCase() === cleanSku) ||
+          (cleanBarcode && m.barcode.trim().toLowerCase() === cleanBarcode)
+      );
+
+      if (existingIdx > -1) {
+        const current = this.medicines[existingIdx];
+        const merged: MedicineItem = {
+          ...current,
+          ...raw,
+          id: current.id,
+          updated: nowIso,
+        };
+        this.medicines[existingIdx] = merged;
+        this.enqueueOutbox('UPDATE_MEDICINE', { id: current.id, updates: raw });
+        updated++;
+      } else {
+        const units = Number(raw.unitsPerPack) > 0 ? Number(raw.unitsPerPack) : 1;
+        const unitCost = Math.max(0, Number(raw.unitCostPrice) || 0);
+        const unitRetail = Math.max(0, Number(raw.unitRetailPrice) || 0);
+        const newItem: MedicineItem = {
+          id: `med_${Date.now()}_${Math.random().toString(36).substring(2, 6)}_${added}`,
+          name: raw.name.trim(),
+          genericName: (raw.genericName || 'Generic').trim(),
+          barcode: (raw.barcode || `BC-${Date.now()}-${added}`).trim(),
+          sku: (raw.sku || `SKU-${Date.now()}-${added}`).trim(),
+          category: raw.category || 'General / Other',
+          department: raw.department || 'pharmacy',
+          dosageForm: raw.dosageForm || 'Tablet',
+          strength: (raw.strength || '').trim(),
+          unitsPerPack: units,
+          unitCostPrice: unitCost,
+          unitRetailPrice: unitRetail,
+          looseCostPrice: Number(raw.looseCostPrice) || Number((unitCost / units).toFixed(2)),
+          looseRetailPrice: Number(raw.looseRetailPrice) || Number((unitRetail / units).toFixed(2)),
+          currentStockPacks: Math.max(0, Number(raw.currentStockPacks) || 0),
+          currentStockLoose: Math.max(0, Number(raw.currentStockLoose) || 0),
+          minThresholdPacks: Math.max(0, Number(raw.minThresholdPacks) || 5),
+          batchNumber: (raw.batchNumber || 'B-NEW').trim(),
+          expiryDate: (raw.expiryDate || '2027-12-31').trim(),
+          shelfLocation: (raw.shelfLocation || 'Main Shelf').trim(),
+          manufacturer: (raw.manufacturer || 'Local').trim(),
+          requiresPrescription: Boolean(raw.requiresPrescription),
+          supplier: raw.supplier,
+          notes: raw.notes,
+          imageUrl: raw.imageUrl,
+          created: nowIso,
+          updated: nowIso,
+        };
+        this.medicines.unshift(newItem);
+        this.enqueueOutbox('ADD_MEDICINE', newItem);
+        added++;
+      }
+    }
+
+    this.saveMedicines();
+    this.notify();
+    return { added, updated };
+  }
+
+  // Dispense Register / Process Sale Transaction with strict stock & expiry checks
   public async processSale(transactionData: {
     items: SaleItem[];
     customerName: string;
@@ -502,16 +599,64 @@ export class PharmacySyncEngine {
     receivedAmount: number;
     notes?: string;
   }): Promise<SaleTransaction> {
-    const { items, customerName, customerPhone, customerId, counterName, staffName, staffRole, paymentMethod, discountPercent, receivedAmount, notes } = transactionData;
+    const {
+      items,
+      customerName,
+      customerPhone,
+      customerId,
+      counterName,
+      staffName,
+      staffRole,
+      paymentMethod,
+      discountPercent,
+      receivedAmount,
+      notes,
+    } = transactionData;
 
-    const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
+    if (!items || items.length === 0) {
+      throw new Error('Cannot process an empty sale.');
+    }
+
+    // 0. Pre-validate expiry and total available pieces per medicine across all cart lines
+    const requiredPiecesByMed = new Map<string, number>();
+    for (const item of items) {
+      const med = this.medicines.find((m) => m.id === item.medicineId);
+      if (!med) {
+        throw new Error(`Item "${item.medicineName}" no longer exists in inventory.`);
+      }
+      if (isExpired(med.expiryDate)) {
+        throw new Error(
+          `Cannot dispense "${med.name}" (Batch ${med.batchNumber}) because it expired on ${med.expiryDate}.`
+        );
+      }
+      const unitsPerPack = med.unitsPerPack > 0 ? med.unitsPerPack : 1;
+      const piecesToDeduct = item.unitType === 'pack' ? item.quantity * unitsPerPack : item.quantity;
+      requiredPiecesByMed.set(
+        med.id,
+        (requiredPiecesByMed.get(med.id) || 0) + piecesToDeduct
+      );
+    }
+
+    for (const [medId, requestedPieces] of requiredPiecesByMed.entries()) {
+      const med = this.medicines.find((m) => m.id === medId)!;
+      const availablePieces = getTotalPiecesInStock(med);
+      if (requestedPieces > availablePieces) {
+        throw new Error(
+          `Insufficient stock for "${med.name}". Requested ${requestedPieces} total units, but only ${availablePieces} available.`
+        );
+      }
+    }
+
+    const subtotal = Number(items.reduce((sum, item) => sum + item.subtotal, 0).toFixed(2));
     const discountAmount = Math.round((subtotal * (discountPercent || 0)) / 100);
     const totalAmount = Math.max(0, subtotal - discountAmount);
-    const totalProfit = items.reduce((sum, item) => sum + item.profit, 0) - discountAmount;
+    const totalProfit = Number(
+      (items.reduce((sum, item) => sum + item.profit, 0) - discountAmount).toFixed(2)
+    );
     const finalReceived = receivedAmount > 0 ? receivedAmount : totalAmount;
     const changeAmount = Math.max(0, finalReceived - totalAmount);
 
-    const invoiceNumber = `DEMO-${String(1030 + this.sales.length + 1)}`;
+    const invoiceNumber = this.generateInvoiceNumber();
 
     const newTransaction: SaleTransaction = {
       id: `txn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -536,22 +681,36 @@ export class PharmacySyncEngine {
       createdAt: new Date().toISOString(),
     };
 
-    // 1. Decrement inventory stock
+    // 1. Accurately decrement inventory stock (handles pack-breaking without phantom loose units)
     items.forEach((item) => {
       const med = this.medicines.find((m) => m.id === item.medicineId);
       if (!med) return;
 
+      const unitsPerPack = med.unitsPerPack > 0 ? med.unitsPerPack : 1;
+
       if (item.unitType === 'pack') {
-        med.currentStockPacks = Math.max(0, med.currentStockPacks - item.quantity);
-      } else {
-        let remainingLoose = (med.currentStockLoose || 0) - item.quantity;
-        if (remainingLoose < 0) {
-          const unitsPerPack = med.unitsPerPack > 0 ? med.unitsPerPack : 1;
-          const packsNeeded = Math.ceil(Math.abs(remainingLoose) / unitsPerPack);
-          med.currentStockPacks = Math.max(0, med.currentStockPacks - packsNeeded);
-          remainingLoose += packsNeeded * unitsPerPack;
+        if (med.currentStockPacks >= item.quantity) {
+          med.currentStockPacks -= item.quantity;
+        } else {
+          // If loose pieces make up the remaining pack quantity
+          const totalAfter = Math.max(0, getTotalPiecesInStock(med) - item.quantity * unitsPerPack);
+          med.currentStockPacks = Math.floor(totalAfter / unitsPerPack);
+          med.currentStockLoose = totalAfter % unitsPerPack;
         }
-        med.currentStockLoose = Math.max(0, remainingLoose);
+      } else {
+        let currentLoose = med.currentStockLoose || 0;
+        if (currentLoose >= item.quantity) {
+          med.currentStockLoose = currentLoose - item.quantity;
+        } else {
+          const deficitLoose = item.quantity - currentLoose;
+          const packsToBreak = Math.min(
+            med.currentStockPacks,
+            Math.ceil(deficitLoose / unitsPerPack)
+          );
+          med.currentStockPacks = Math.max(0, med.currentStockPacks - packsToBreak);
+          currentLoose += packsToBreak * unitsPerPack;
+          med.currentStockLoose = Math.max(0, currentLoose - item.quantity);
+        }
       }
       med.updated = new Date().toISOString();
     });
@@ -562,9 +721,13 @@ export class PharmacySyncEngine {
       if (customerId) {
         targetCustomer = this.khataCustomers.find((c) => c.id === customerId);
       } else if (customerPhone) {
-        targetCustomer = this.khataCustomers.find((c) => c.phone.replace(/\s+/g, '') === customerPhone.replace(/\s+/g, ''));
+        targetCustomer = this.khataCustomers.find(
+          (c) => c.phone.replace(/\s+/g, '') === customerPhone.replace(/\s+/g, '')
+        );
       } else if (customerName && customerName !== 'Walk-in Customer') {
-        targetCustomer = this.khataCustomers.find((c) => c.name.toLowerCase() === customerName.toLowerCase());
+        targetCustomer = this.khataCustomers.find(
+          (c) => c.name.toLowerCase() === customerName.toLowerCase()
+        );
       }
 
       if (targetCustomer) {
@@ -582,11 +745,10 @@ export class PharmacySyncEngine {
         });
         this.saveKhata();
       } else if (customerName && customerName !== 'Walk-in Customer') {
-        // Automatically create customer khata record
         const newKhata: CustomerKhata = {
           id: `kht_${Date.now()}`,
-          name: customerName,
-          phone: customerPhone || '',
+          name: customerName.trim(),
+          phone: customerPhone?.trim() || '',
           balanceDue: totalAmount,
           updatedAt: new Date().toISOString(),
           createdAt: new Date().toISOString(),
