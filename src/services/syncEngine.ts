@@ -20,7 +20,13 @@ import {
   SupplierLedgerEntry,
   GRNLineItem,
   SupplierPaymentMethod,
-  INITIAL_SUPPLIER_ACCOUNTS
+  INITIAL_SUPPLIER_ACCOUNTS,
+  GallaClosingRecord,
+  GallaDenominationCount,
+  LiveGallaCalculation,
+  ShiftSlot,
+  UserRole,
+  INITIAL_GALLA_CLOSINGS
 } from '../types/pharmacy';
 import { INITIAL_ZAHID_MEDICINES } from '../data/initialMedicines';
 import { getDaysUntilExpiry, getTotalPiecesInStock, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
@@ -41,6 +47,7 @@ export interface PharmacyBackupSnapshot {
   auditSnapshots?: MonthlyAuditSnapshot[];
   shortBook?: ShortBookEntry[];
   supplierAccounts?: SupplierAccount[];
+  gallaClosings?: GallaClosingRecord[];
 }
 
 const INVENTORY_STORAGE_KEY = 'zahid_med_inventory_v2';
@@ -54,6 +61,14 @@ const EXPENSES_STORAGE_KEY = 'zahid_pharmacy_expenses_v1';
 const AUDIT_SNAPSHOTS_KEY = 'zahid_monthly_audits_v1';
 const SHORT_BOOK_STORAGE_KEY = 'zahid_short_book_v1';
 const SUPPLIER_KHATA_STORAGE_KEY = 'zahid_supplier_accounts_v1';
+const GALLA_CLOSINGS_STORAGE_KEY = 'zahid_galla_closings_v1';
+const GALLA_OPENING_FLOATS_KEY = 'zahid_galla_opening_floats_v1';
+
+const DEFAULT_COUNTER_FLOATS: Record<string, number> = {
+  'Main Counter': 5000,
+  'Counter 02': 3000,
+  'Counter 3': 2000,
+};
 
 export class PharmacySyncEngine {
   private medicines: MedicineItem[] = [];
@@ -67,6 +82,8 @@ export class PharmacySyncEngine {
   private auditSnapshots: MonthlyAuditSnapshot[] = [];
   private shortBook: ShortBookEntry[] = [];
   private supplierAccounts: SupplierAccount[] = [...INITIAL_SUPPLIER_ACCOUNTS];
+  private gallaClosings: GallaClosingRecord[] = [...INITIAL_GALLA_CLOSINGS];
+  private gallaOpeningFloats: Record<string, number> = { ...DEFAULT_COUNTER_FLOATS };
   private subscribers: Array<() => void> = [];
 
   constructor() {
@@ -183,6 +200,23 @@ export class PharmacySyncEngine {
         this.supplierAccounts = [...INITIAL_SUPPLIER_ACCOUNTS];
         localStorage.setItem(SUPPLIER_KHATA_STORAGE_KEY, JSON.stringify(this.supplierAccounts));
       }
+
+      // 10. Load Daily Galla Closings & Opening Floats
+      const savedGalla = localStorage.getItem(GALLA_CLOSINGS_STORAGE_KEY);
+      if (savedGalla) {
+        this.gallaClosings = JSON.parse(savedGalla);
+      } else {
+        this.gallaClosings = [...INITIAL_GALLA_CLOSINGS];
+        localStorage.setItem(GALLA_CLOSINGS_STORAGE_KEY, JSON.stringify(this.gallaClosings));
+      }
+
+      const savedFloats = localStorage.getItem(GALLA_OPENING_FLOATS_KEY);
+      if (savedFloats) {
+        this.gallaOpeningFloats = { ...DEFAULT_COUNTER_FLOATS, ...JSON.parse(savedFloats) };
+      } else {
+        this.gallaOpeningFloats = { ...DEFAULT_COUNTER_FLOATS };
+        localStorage.setItem(GALLA_OPENING_FLOATS_KEY, JSON.stringify(this.gallaOpeningFloats));
+      }
     } catch (e) {
       console.warn('Failed to initialize local pharmacy store, falling back to defaults', e);
       this.medicines = [...INITIAL_ZAHID_MEDICINES];
@@ -196,6 +230,8 @@ export class PharmacySyncEngine {
       this.auditSnapshots = [];
       this.shortBook = [];
       this.supplierAccounts = [...INITIAL_SUPPLIER_ACCOUNTS];
+      this.gallaClosings = [...INITIAL_GALLA_CLOSINGS];
+      this.gallaOpeningFloats = { ...DEFAULT_COUNTER_FLOATS };
     }
   }
 
@@ -346,7 +382,8 @@ export class PharmacySyncEngine {
     customerId: string,
     amount: number,
     paymentMethod: string = 'Cash',
-    note?: string
+    note?: string,
+    counterName?: string
   ): Promise<CustomerKhata> {
     const customer = this.khataCustomers.find((c) => c.id === customerId);
     if (!customer) throw new Error('Customer account not found');
@@ -361,6 +398,7 @@ export class PharmacySyncEngine {
       description: `Payment · ${paymentMethod}${note ? ` · ${note}` : ''}`,
       amount: paymentAmount,
       paymentMethod,
+      counterName: counterName || this.activeCounter,
       date: new Date().toISOString(),
       note,
     };
@@ -1259,6 +1297,7 @@ export class PharmacySyncEngine {
     title: string;
     amount: number;
     paidBy: string;
+    counterName?: string;
     paymentMethod: 'Cash' | 'EasyPaisa' | 'JazzCash' | 'Bank Transfer';
     note?: string;
   }): Promise<ExpenseRecord> {
@@ -1273,6 +1312,7 @@ export class PharmacySyncEngine {
       title: data.title.trim() || data.category,
       amount: Math.max(0, Number(data.amount) || 0),
       paidBy: data.paidBy,
+      counterName: data.counterName || this.activeCounter,
       paymentMethod: data.paymentMethod,
       note: data.note?.trim(),
       createdAt: new Date().toISOString(),
@@ -1848,6 +1888,232 @@ export class PharmacySyncEngine {
     }
   }
 
+  // --- Daily Galla (Cash Drawer) Closing & Shift Reconciliation ---
+  public getGallaClosings(): GallaClosingRecord[] {
+    return [...this.gallaClosings];
+  }
+
+  public getOpeningFloat(counterName: string): number {
+    if (counterName === 'ALL') {
+      return this.counters.reduce(
+        (sum, c) => sum + (this.gallaOpeningFloats[c.name] ?? DEFAULT_COUNTER_FLOATS[c.name] ?? 3000),
+        0
+      );
+    }
+    return this.gallaOpeningFloats[counterName] ?? DEFAULT_COUNTER_FLOATS[counterName] ?? 3000;
+  }
+
+  public setOpeningFloat(counterName: string, amount: number): number {
+    const cleanAmount = Math.max(0, Math.round(Number(amount) || 0));
+    this.gallaOpeningFloats[counterName] = cleanAmount;
+    try {
+      localStorage.setItem(GALLA_OPENING_FLOATS_KEY, JSON.stringify(this.gallaOpeningFloats));
+    } catch {}
+    this.notify();
+    return cleanAmount;
+  }
+
+  /**
+   * Calculates Expected Physical Cash in the Galla (Cash Drawer) for a given date & counter:
+   * Expected Cash = Opening Float + Cash POS Sales + Cash Khata Recoveries - Daily Cash Expenses
+   */
+  public calculateLiveGalla(dateStr?: string, counterFilter?: string): LiveGallaCalculation {
+    const targetDate = dateStr || new Date().toISOString().slice(0, 10);
+    const targetCounter = counterFilter || this.activeCounter;
+    const isAllCounters = targetCounter === 'ALL';
+
+    const openingFloat = this.getOpeningFloat(isAllCounters ? 'ALL' : targetCounter);
+
+    // 1. Filter completed POS sales for targetDate & counter
+    const matchingSales = this.sales.filter((s) => {
+      if (s.status === 'refunded') return false;
+      const saleDate = (s.createdAt || '').slice(0, 10);
+      if (saleDate !== targetDate) return false;
+      if (!isAllCounters) {
+        const sCounter = s.counterName || 'Main Counter';
+        if (sCounter !== targetCounter) return false;
+      }
+      return true;
+    });
+
+    const cashSalesList = matchingSales.filter((s) => s.paymentMethod === 'Cash');
+    const cashPosSales = Math.round(
+      cashSalesList.reduce((sum, s) => sum + (s.totalAmount || 0), 0)
+    );
+    const cashPosInvoiceCount = cashSalesList.length;
+
+    const digitalPosSales = Math.round(
+      matchingSales
+        .filter((s) => ['EasyPaisa', 'JazzCash', 'Bank Transfer', 'Card'].includes(s.paymentMethod))
+        .reduce((sum, s) => sum + (s.totalAmount || 0), 0)
+    );
+
+    const creditPosSales = Math.round(
+      matchingSales
+        .filter((s) => s.paymentMethod === 'Credit')
+        .reduce((sum, s) => sum + (s.totalAmount || 0), 0)
+    );
+
+    // 2. Sum Cash Khata Recoveries for targetDate & counter
+    let cashKhataRecoveries = 0;
+    let cashKhataRecoveryCount = 0;
+
+    this.khataCustomers.forEach((customer) => {
+      (customer.history || []).forEach((entry) => {
+        if (entry.type !== 'payment') return;
+        const method = (entry.paymentMethod || 'Cash').toLowerCase();
+        if (method !== 'cash') return;
+        const entryDate = (entry.date || '').slice(0, 10);
+        if (entryDate !== targetDate) return;
+
+        if (!isAllCounters) {
+          const entryCounter = entry.counterName || 'Main Counter';
+          if (entryCounter !== targetCounter) return;
+        }
+
+        cashKhataRecoveries += Math.round(entry.amount || 0);
+        cashKhataRecoveryCount += 1;
+      });
+    });
+
+    // 3. Sum Daily Cash Expenses paid out of the drawer for targetDate & counter
+    const matchingCashExpenses = this.expenses.filter((exp) => {
+      if (exp.frequency !== 'daily') return false;
+      if (exp.paymentMethod !== 'Cash') return false;
+      const expDate = (exp.date || '').slice(0, 10);
+      if (expDate !== targetDate) return false;
+      if (!isAllCounters) {
+        const expCounter = exp.counterName || 'Main Counter';
+        if (expCounter !== targetCounter) return false;
+      }
+      return true;
+    });
+
+    const dailyCashExpenses = Math.round(
+      matchingCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0)
+    );
+    const dailyCashExpenseCount = matchingCashExpenses.length;
+
+    // Formula: Expected Cash = Opening Float + Cash POS Sales + Cash Khata Recoveries - Daily Cash Expenses
+    const expectedPhysicalCash =
+      openingFloat + cashPosSales + cashKhataRecoveries - dailyCashExpenses;
+
+    return {
+      date: targetDate,
+      counterName: isAllCounters ? 'All Counters (Consolidated)' : targetCounter,
+      openingFloat,
+      cashPosSales,
+      cashPosInvoiceCount,
+      cashKhataRecoveries,
+      cashKhataRecoveryCount,
+      dailyCashExpenses,
+      dailyCashExpenseCount,
+      expectedPhysicalCash,
+      digitalPosSales,
+      creditPosSales,
+    };
+  }
+
+  public recordGallaClosing(data: {
+    date: string;
+    counterName: string;
+    shiftSlot: ShiftSlot;
+    closedByStaff: string;
+    closedByRole: UserRole;
+    openingFloat: number;
+    actualCashCounted: number;
+    cashHandedToOwner: number;
+    closingFloatKeptInDrawer: number;
+    denominations?: GallaDenominationCount;
+    note?: string;
+  }): GallaClosingRecord {
+    const cleanCounter = data.counterName === 'ALL' ? this.activeCounter : data.counterName;
+    const live = this.calculateLiveGalla(data.date, cleanCounter);
+    const openingFloat = Math.max(0, Math.round(Number(data.openingFloat) || live.openingFloat));
+    const expectedPhysicalCash =
+      openingFloat + live.cashPosSales + live.cashKhataRecoveries - live.dailyCashExpenses;
+
+    const actualCashCounted = Math.max(0, Math.round(Number(data.actualCashCounted) || 0));
+    const varianceAmount = actualCashCounted - expectedPhysicalCash;
+    const varianceStatus =
+      varianceAmount === 0 ? 'balanced' : varianceAmount < 0 ? 'shortage' : 'surplus';
+
+    const cashHandedToOwner = Math.max(0, Math.round(Number(data.cashHandedToOwner) || 0));
+    const closingFloatKeptInDrawer = Math.max(
+      0,
+      Math.round(Number(data.closingFloatKeptInDrawer) ?? Math.max(0, actualCashCounted - cashHandedToOwner))
+    );
+
+    const dateCompact = (data.date || new Date().toISOString().slice(0, 10)).replace(/-/g, '');
+    const counterShort = cleanCounter
+      .split(/\s+/)
+      .map((w) => w[0]?.toUpperCase() || '')
+      .join('');
+    const closingNumber = `GAL-${dateCompact}-${counterShort || 'MC'}-${Math.floor(10 + Math.random() * 89)}`;
+
+    const newClosing: GallaClosingRecord = {
+      id: `gal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      closingNumber,
+      date: data.date || new Date().toISOString().slice(0, 10),
+      counterName: cleanCounter,
+      shiftSlot: data.shiftSlot,
+      closedByStaff: data.closedByStaff,
+      closedByRole: data.closedByRole,
+      openingFloat,
+      cashPosSales: live.cashPosSales,
+      cashPosInvoiceCount: live.cashPosInvoiceCount,
+      cashKhataRecoveries: live.cashKhataRecoveries,
+      cashKhataRecoveryCount: live.cashKhataRecoveryCount,
+      dailyCashExpenses: live.dailyCashExpenses,
+      dailyCashExpenseCount: live.dailyCashExpenseCount,
+      expectedPhysicalCash,
+      actualCashCounted,
+      varianceAmount,
+      varianceStatus,
+      cashHandedToOwner,
+      closingFloatKeptInDrawer,
+      denominations: data.denominations,
+      digitalSalesReference: live.digitalPosSales,
+      creditSalesReference: live.creditPosSales,
+      note: data.note?.trim() || undefined,
+      closedAt: new Date().toISOString(),
+    };
+
+    // Update opening float for next shift on this counter to the retained float
+    if (closingFloatKeptInDrawer >= 0) {
+      this.gallaOpeningFloats[cleanCounter] = closingFloatKeptInDrawer;
+      try {
+        localStorage.setItem(GALLA_OPENING_FLOATS_KEY, JSON.stringify(this.gallaOpeningFloats));
+      } catch {}
+    }
+
+    this.gallaClosings.unshift(newClosing);
+    this.saveGallaClosings();
+    this.enqueueOutbox('RECORD_GALLA_CLOSING', newClosing);
+    this.notify();
+
+    return newClosing;
+  }
+
+  public deleteGallaClosing(id: string): boolean {
+    const before = this.gallaClosings.length;
+    this.gallaClosings = this.gallaClosings.filter((g) => g.id !== id);
+    if (this.gallaClosings.length !== before) {
+      this.saveGallaClosings();
+      this.notify();
+      return true;
+    }
+    return false;
+  }
+
+  private saveGallaClosings(): void {
+    try {
+      localStorage.setItem(GALLA_CLOSINGS_STORAGE_KEY, JSON.stringify(this.gallaClosings));
+    } catch (e) {
+      console.error('Failed to write Galla closings to localStorage', e);
+    }
+  }
+
   public createBackupSnapshot(): PharmacyBackupSnapshot {
     return {
       schemaVersion: '2.0',
@@ -1873,6 +2139,7 @@ export class PharmacySyncEngine {
         ...sup,
         ledger: Array.isArray(sup.ledger) ? sup.ledger.map((l) => ({ ...l })) : [],
       })),
+      gallaClosings: this.gallaClosings.map((g) => ({ ...g })),
     };
   }
 
@@ -2019,6 +2286,13 @@ export class PharmacySyncEngine {
       this.saveSuppliers();
     }
 
+    if (Array.isArray(parsed.gallaClosings)) {
+      this.gallaClosings = (parsed.gallaClosings as GallaClosingRecord[]).filter(
+        (g) => g && typeof g.id === 'string' && typeof g.closingNumber === 'string'
+      );
+      this.saveGallaClosings();
+    }
+
     // Clear stale outbox and notify all views
     this.outbox = [];
     this.saveOutbox();
@@ -2046,18 +2320,22 @@ export class PharmacySyncEngine {
     this.auditSnapshots = [];
     this.shortBook = [];
     this.supplierAccounts = [...INITIAL_SUPPLIER_ACCOUNTS];
+    this.gallaClosings = [...INITIAL_GALLA_CLOSINGS];
+    this.gallaOpeningFloats = { ...DEFAULT_COUNTER_FLOATS };
     this.saveMedicines();
     this.saveSales();
     this.saveOutbox();
     this.saveKhata();
     this.saveShortBook();
     this.saveSuppliers();
+    this.saveGallaClosings();
     try {
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.pharmacyDetails));
       localStorage.setItem(COUNTERS_STORAGE_KEY, JSON.stringify(this.counters));
       localStorage.setItem(ACTIVE_COUNTER_KEY, this.activeCounter);
       localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(this.expenses));
       localStorage.setItem(AUDIT_SNAPSHOTS_KEY, JSON.stringify(this.auditSnapshots));
+      localStorage.setItem(GALLA_OPENING_FLOATS_KEY, JSON.stringify(this.gallaOpeningFloats));
     } catch {}
     this.notify();
   }

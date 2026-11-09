@@ -21,7 +21,8 @@ import {
   HelpCircle,
   ShieldAlert,
   Wallet,
-  Truck
+  Truck,
+  Calculator
 } from 'lucide-react';
 import { 
   ConnectionStatus, 
@@ -30,7 +31,8 @@ import {
   SaleTransaction, 
   UserAccount, 
   CustomerKhata,
-  SupplierAccount
+  SupplierAccount,
+  GallaClosingRecord
 } from './types/pharmacy';
 import { syncEngine } from './services/syncEngine';
 import { staffAuth } from './services/staffAuth';
@@ -42,6 +44,7 @@ import { can, canOpenTab, defaultTabFor } from './utils/permissions';
 // Views & Components
 import { DashboardView } from './components/DashboardView';
 import { PosView } from './components/PosView';
+import { GallaClosingView } from './components/GallaClosingView';
 import { SpreadsheetView, InventoryStockFilter } from './components/SpreadsheetView';
 import { CriticalStockView } from './components/CriticalStockView';
 import { CreditKhataView } from './components/CreditKhataView';
@@ -77,6 +80,7 @@ export default function App() {
   const [sales, setSales] = useState<SaleTransaction[]>(syncEngine.getSales());
   const [khataCustomers, setKhataCustomers] = useState<CustomerKhata[]>(syncEngine.getKhataCustomers());
   const [supplierAccounts, setSupplierAccounts] = useState<SupplierAccount[]>(syncEngine.getSupplierAccounts());
+  const [gallaClosings, setGallaClosings] = useState<GallaClosingRecord[]>(syncEngine.getGallaClosings());
   const [alerts, setAlerts] = useState(syncEngine.getAlerts());
   const [externalInventoryFilter, setExternalInventoryFilter] = useState<InventoryStockFilter | null>(null);
   const [initialReportSection, setInitialReportSection] = useState<'invoices' | 'products' | null>(null);
@@ -158,6 +162,7 @@ export default function App() {
       setSales(syncEngine.getSales());
       setKhataCustomers(syncEngine.getKhataCustomers());
       setSupplierAccounts(syncEngine.getSupplierAccounts());
+      setGallaClosings(syncEngine.getGallaClosings());
       setAlerts(syncEngine.getAlerts());
       setPharmacyDetails(syncEngine.getPharmacyDetails());
       setCounters(syncEngine.getCounters());
@@ -254,6 +259,11 @@ export default function App() {
         if (key === 'd') {
           e.preventDefault();
           handleNavigateTab('suppliers', '⚡ Supplier & GRN Ledger (Ctrl+D)');
+          return;
+        }
+        if (key === 'g') {
+          e.preventDefault();
+          handleNavigateTab('galla', '⚡ Daily Galla Closing & Shift Reconciliation (Ctrl+G)');
           return;
         }
         if (key === 'r') {
@@ -415,6 +425,8 @@ export default function App() {
         return 'Overview';
       case 'pos':
         return 'Point of sale';
+      case 'galla':
+        return 'Daily Galla closing';
       case 'inventory':
         return 'Medicine stock';
       case 'critical_stock':
@@ -575,6 +587,26 @@ export default function App() {
                   </div>
                   <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
                     ^P
+                  </kbd>
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleNavigateTab('galla');
+                  }}
+                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                    activeTab === 'galla'
+                      ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
+                      : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
+                  }`}
+                  title="Daily Galla (Cash Drawer) Closing & Shift Reconciliation (Ctrl+G)"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Calculator className="w-4 h-4 text-emerald-400" />
+                    <span>Daily Galla closing</span>
+                  </div>
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                    ^G
                   </kbd>
                 </button>
               </div>
@@ -947,6 +979,18 @@ export default function App() {
                 soundService.scanWarning();
                 setUnrecognizedCode(code);
                 setIsLinkCodeModalOpen(true);
+              }}
+            />
+          )}
+
+          {activeTab === 'galla' && (
+            <GallaClosingView
+              counters={counters}
+              activeCounter={activeCounter}
+              currentUser={currentUser}
+              gallaClosings={gallaClosings}
+              onGallaUpdated={() => {
+                setGallaClosings(syncEngine.getGallaClosings());
               }}
             />
           )}

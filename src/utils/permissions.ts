@@ -89,6 +89,7 @@ export function canOpenTab(role: UserRole, tab: string): boolean {
       'overview',
       'dashboard',
       'pos',
+      'galla',
       'inventory',
       'critical_stock',
       'khata',
@@ -97,7 +98,7 @@ export function canOpenTab(role: UserRole, tab: string): boolean {
     ].includes(tab);
   }
   if (role === 'cashier') {
-    return ['overview', 'dashboard', 'pos', 'inventory', 'critical_stock', 'khata'].includes(tab);
+    return ['overview', 'dashboard', 'pos', 'galla', 'inventory', 'critical_stock', 'khata'].includes(tab);
   }
   return false;
 }

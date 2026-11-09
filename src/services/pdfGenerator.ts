@@ -4,6 +4,7 @@ import {
   SaleTransaction,
   ShortBookEntry,
   SupplierAccount,
+  GallaClosingRecord,
   ZAHID_PHARMACY_DETAILS,
 } from '../types/pharmacy';
 import { formatDateTime } from '../utils/dates';
@@ -762,6 +763,192 @@ export function generateSupplierStatementPDF(supplier: SupplierAccount): void {
 
   const safeSup = supplier.distributorName.replace(/[^a-zA-Z0-9]+/g, '_');
   doc.save(`${safeSup}_Khata_Statement_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+export function generateGallaClosingPDF(record: GallaClosingRecord): void {
+  const details = syncEngine.getPharmacyDetails() || ZAHID_PHARMACY_DETAILS;
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  let y = 16;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(17);
+  doc.text(details.name.toUpperCase(), pageWidth / 2, y, { align: 'center' });
+
+  y += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.text(`${details.address}, ${details.city}`, pageWidth / 2, y, { align: 'center' });
+
+  y += 5;
+  doc.text(
+    `Drug Licence: ${details.drugLicenceNumber} | Phone: ${details.phone}`,
+    pageWidth / 2,
+    y,
+    { align: 'center' }
+  );
+
+  y += 6;
+  doc.setLineWidth(0.5);
+  doc.line(14, y, pageWidth - 14, y);
+
+  y += 8;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text(`DAILY GALLA (CASH DRAWER) CLOSING & SHIFT RECONCILIATION`, 14, y);
+
+  y += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.text(
+    `Closing Slip #: ${record.closingNumber} | Counter: ${record.counterName} | Shift: ${record.shiftSlot}`,
+    14,
+    y
+  );
+
+  y += 5.5;
+  doc.text(
+    `Date: ${record.date} | Closed By: ${record.closedByStaff} (${record.closedByRole.toUpperCase()}) | Time: ${formatDateTime(record.closedAt)}`,
+    14,
+    y
+  );
+
+  y += 8;
+  // Formula Box
+  doc.setFillColor(240, 253, 244);
+  doc.rect(14, y, pageWidth - 28, 48, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text('1. EXPECTED PHYSICAL CASH FORMULA BREAKDOWN', 18, y + 7);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.text('(+) Opening Drawer Float (Start Cash):', 20, y + 15);
+  doc.text(formatPKR(record.openingFloat), pageWidth - 20, y + 15, { align: 'right' });
+
+  doc.text(
+    `(+) Cash POS Sales (${record.cashPosInvoiceCount} cash invoices):`,
+    20,
+    y + 22
+  );
+  doc.text(formatPKR(record.cashPosSales), pageWidth - 20, y + 22, { align: 'right' });
+
+  doc.text(
+    `(+) Cash Khata Recoveries (${record.cashKhataRecoveryCount} cash collections):`,
+    20,
+    y + 29
+  );
+  doc.text(formatPKR(record.cashKhataRecoveries), pageWidth - 20, y + 29, { align: 'right' });
+
+  doc.text(
+    `(-) Daily Cash Expenses Paid from Galla (${record.dailyCashExpenseCount} vouchers):`,
+    20,
+    y + 36
+  );
+  doc.text(`- ${formatPKR(record.dailyCashExpenses)}`, pageWidth - 20, y + 36, {
+    align: 'right',
+  });
+
+  doc.setLineWidth(0.3);
+  doc.line(18, y + 39.5, pageWidth - 18, y + 39.5);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.text('(=) EXPECTED PHYSICAL CASH IN DRAWER:', 20, y + 45);
+  doc.text(formatPKR(record.expectedPhysicalCash), pageWidth - 20, y + 45, {
+    align: 'right',
+  });
+
+  y += 56;
+  doc.setFillColor(248, 250, 252);
+  doc.rect(14, y, pageWidth - 28, 36, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text('2. ACTUAL PHYSICAL COUNT & VARIANCE RECONCILIATION', 18, y + 7);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.text('Actual Physical Cash Counted by Cashier:', 20, y + 15);
+  doc.setFont('helvetica', 'bold');
+  doc.text(formatPKR(record.actualCashCounted), pageWidth - 20, y + 15, {
+    align: 'right',
+  });
+
+  const statusLabel =
+    record.varianceStatus === 'balanced'
+      ? 'EXACT MATCH (BALANCED)'
+      : record.varianceStatus === 'shortage'
+      ? `CASH SHORTAGE (${formatPKR(Math.abs(record.varianceAmount))})`
+      : `CASH SURPLUS (+${formatPKR(record.varianceAmount)})`;
+
+  doc.setFont('helvetica', 'normal');
+  doc.text('Drawer Reconciliation Status / Variance:', 20, y + 22);
+  doc.setFont('helvetica', 'bold');
+  doc.text(statusLabel, pageWidth - 20, y + 22, { align: 'right' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.text('Cash Handed Over to Owner (Safe Drop):', 20, y + 29);
+  doc.text(formatPKR(record.cashHandedToOwner), 100, y + 29);
+
+  doc.text('Retained in Drawer for Next Shift Float:', 115, y + 29);
+  doc.text(formatPKR(record.closingFloatKeptInDrawer), pageWidth - 20, y + 29, {
+    align: 'right',
+  });
+
+  y += 44;
+
+  if (record.denominations) {
+    const d = record.denominations;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.text('3. PKR CURRENCY DENOMINATION COUNT', 14, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.text(
+      `Rs.5000 x ${d.n5000} (${formatPKR(d.n5000 * 5000)})  |  Rs.1000 x ${d.n1000} (${formatPKR(
+        d.n1000 * 1000
+      )})  |  Rs.500 x ${d.n500} (${formatPKR(d.n500 * 500)})  |  Rs.100 x ${d.n100} (${formatPKR(
+        d.n100 * 100
+      )})`,
+      14,
+      y
+    );
+    y += 5;
+    doc.text(
+      `Rs.50 x ${d.n50} (${formatPKR(d.n50 * 50)})  |  Rs.20 x ${d.n20} (${formatPKR(
+        d.n20 * 20
+      )})  |  Rs.10 x ${d.n10} (${formatPKR(d.n10 * 10)})  |  Coins: ${formatPKR(d.coins)}`,
+      14,
+      y
+    );
+    y += 8;
+  }
+
+  if (record.note) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(9);
+    doc.text(`Shift Note: ${record.note}`, 14, y);
+    y += 10;
+  }
+
+  y += 14;
+  doc.setLineWidth(0.3);
+  doc.line(18, y, 78, y);
+  doc.line(pageWidth - 78, y, pageWidth - 18, y);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(`Cashier Signature (${record.closedByStaff})`, 22, y + 5);
+  doc.text(`Owner / Pharmacist Verification (${details.ownerName})`, pageWidth - 76, y + 5);
+
+  doc.save(`${record.closingNumber}_Galla_Reconciliation.pdf`);
 }
 
 

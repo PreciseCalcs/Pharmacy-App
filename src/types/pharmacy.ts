@@ -261,6 +261,7 @@ export interface KhataEntry {
   description: string;
   amount: number;
   paymentMethod?: string;
+  counterName?: string;
   date: string;
   note?: string;
 }
@@ -317,6 +318,7 @@ export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
         description: 'Payment · Cash',
         amount: 100,
         paymentMethod: 'Cash',
+        counterName: 'Main Counter',
         date: '2026-11-08T09:30:00.000Z',
         note: 'Counter payment',
       },
@@ -327,6 +329,7 @@ export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
         description: 'Credit sale · DEMO-1042',
         amount: 940,
         paymentMethod: 'Credit',
+        counterName: 'Main Counter',
         date: '2026-11-08T08:15:00.000Z',
       },
       {
@@ -336,6 +339,7 @@ export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
         description: 'Credit sale · DEMO-1035',
         amount: 1440,
         paymentMethod: 'Credit',
+        counterName: 'Main Counter',
         date: '2026-11-07T14:20:00.000Z',
       },
       {
@@ -344,6 +348,7 @@ export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
         description: 'Payment · Cash · Part payment',
         amount: 250,
         paymentMethod: 'Cash',
+        counterName: 'Main Counter',
         date: '2026-11-07T11:00:00.000Z',
         note: 'Part payment',
       },
@@ -365,6 +370,7 @@ export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
         description: 'Credit sale · DEMO-1041',
         amount: 640,
         paymentMethod: 'Credit',
+        counterName: 'Counter 02',
         date: '2026-11-08T07:45:00.000Z',
       },
       {
@@ -373,6 +379,7 @@ export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
         description: 'Payment · Cash · Full settlement',
         amount: 640,
         paymentMethod: 'Cash',
+        counterName: 'Counter 02',
         date: '2026-11-08T10:00:00.000Z',
       },
     ],
@@ -392,6 +399,7 @@ export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
         description: 'Payment · EasyPaisa',
         amount: 450,
         paymentMethod: 'EasyPaisa',
+        counterName: 'Main Counter',
         date: '2026-11-06T16:00:00.000Z',
       },
     ],
@@ -436,6 +444,7 @@ export interface ExpenseRecord {
   title: string;
   amount: number;
   paidBy: string;
+  counterName?: string; // Counter drawer from which daily cash expense was paid
   paymentMethod: 'Cash' | 'EasyPaisa' | 'JazzCash' | 'Bank Transfer';
   note?: string;
   createdAt: string;
@@ -729,6 +738,167 @@ export const INITIAL_SUPPLIER_ACCOUNTS: SupplierAccount[] = [
     ],
   },
 ];
+
+// --- Daily Galla (Cash Drawer) Closing & Shift Reconciliation ---
+export type ShiftSlot = 'Morning Shift' | 'Evening / Night Closing' | 'Full Day Shift';
+
+export type GallaVarianceStatus = 'balanced' | 'shortage' | 'surplus';
+
+export interface GallaDenominationCount {
+  n5000: number;
+  n1000: number;
+  n500: number;
+  n100: number;
+  n50: number;
+  n20: number;
+  n10: number;
+  coins: number; // Total PKR value in coins
+}
+
+export interface LiveGallaCalculation {
+  date: string; // 'YYYY-MM-DD'
+  counterName: string; // e.g. 'Main Counter', 'Counter 02', or 'All Counters'
+  openingFloat: number;
+  cashPosSales: number;
+  cashPosInvoiceCount: number;
+  cashKhataRecoveries: number;
+  cashKhataRecoveryCount: number;
+  dailyCashExpenses: number;
+  dailyCashExpenseCount: number;
+  expectedPhysicalCash: number; // Opening Float + Cash POS Sales + Cash Khata Recoveries - Daily Cash Expenses
+  digitalPosSales: number; // EasyPaisa / JazzCash / Bank Transfer sales (non-drawer reference)
+  creditPosSales: number; // Credit Khata sales (non-drawer reference)
+}
+
+export interface GallaClosingRecord {
+  id: string;
+  closingNumber: string; // e.g. 'GAL-20261108-MC'
+  date: string; // 'YYYY-MM-DD'
+  counterName: string; // 'Main Counter' | 'Counter 02' | 'Counter 3'
+  shiftSlot: ShiftSlot;
+  closedByStaff: string;
+  closedByRole: UserRole;
+  openingFloat: number;
+  cashPosSales: number;
+  cashPosInvoiceCount: number;
+  cashKhataRecoveries: number;
+  cashKhataRecoveryCount: number;
+  dailyCashExpenses: number;
+  dailyCashExpenseCount: number;
+  expectedPhysicalCash: number; // Opening Float + Cash POS Sales + Cash Khata Recoveries - Daily Cash Expenses
+  actualCashCounted: number;
+  varianceAmount: number; // actualCashCounted - expectedPhysicalCash (<0 shortage, >0 surplus, 0 balanced)
+  varianceStatus: GallaVarianceStatus;
+  cashHandedToOwner: number; // Safe drop / night handover to Dr. Zahid Hussain
+  closingFloatKeptInDrawer: number; // Retained in drawer for next morning opening float
+  denominations?: GallaDenominationCount;
+  digitalSalesReference?: number;
+  creditSalesReference?: number;
+  note?: string;
+  closedAt: string;
+}
+
+export const INITIAL_GALLA_CLOSINGS: GallaClosingRecord[] = [
+  {
+    id: 'gal_seed_main_01',
+    closingNumber: 'GAL-20261108-01',
+    date: '2026-11-08',
+    counterName: 'Main Counter',
+    shiftSlot: 'Evening / Night Closing',
+    closedByStaff: 'Muhammad Asif (Cashier)',
+    closedByRole: 'cashier',
+    openingFloat: 5000,
+    cashPosSales: 14850,
+    cashPosInvoiceCount: 19,
+    cashKhataRecoveries: 100,
+    cashKhataRecoveryCount: 1,
+    dailyCashExpenses: 450,
+    dailyCashExpenseCount: 2,
+    expectedPhysicalCash: 19500, // 5000 + 14850 + 100 - 450
+    actualCashCounted: 19500,
+    varianceAmount: 0,
+    varianceStatus: 'balanced',
+    cashHandedToOwner: 14500,
+    closingFloatKeptInDrawer: 5000,
+    denominations: {
+      n5000: 2,
+      n1000: 6,
+      n500: 5,
+      n100: 8,
+      n50: 3,
+      n20: 2,
+      n10: 1,
+      coins: 0,
+    },
+    digitalSalesReference: 2400,
+    creditSalesReference: 940,
+    note: 'Night Galla tallied 100% with physical count. Rs. 14,500 handed over to Dr. Zahid Hussain.',
+    closedAt: '2026-11-08T22:15:00.000Z',
+  },
+  {
+    id: 'gal_seed_cnt02_02',
+    closingNumber: 'GAL-20261108-02',
+    date: '2026-11-08',
+    counterName: 'Counter 02',
+    shiftSlot: 'Evening / Night Closing',
+    closedByStaff: 'Dr. Bilal Ahmad (Pharmacist)',
+    closedByRole: 'pharmacist',
+    openingFloat: 3000,
+    cashPosSales: 8920,
+    cashPosInvoiceCount: 12,
+    cashKhataRecoveries: 640,
+    cashKhataRecoveryCount: 1,
+    dailyCashExpenses: 200,
+    dailyCashExpenseCount: 1,
+    expectedPhysicalCash: 12360, // 3000 + 8920 + 640 - 200
+    actualCashCounted: 12240,
+    varianceAmount: -120,
+    varianceStatus: 'shortage',
+    cashHandedToOwner: 9240,
+    closingFloatKeptInDrawer: 3000,
+    denominations: {
+      n5000: 1,
+      n1000: 5,
+      n500: 3,
+      n100: 6,
+      n50: 2,
+      n20: 2,
+      n10: 0,
+      coins: 0,
+    },
+    digitalSalesReference: 1150,
+    creditSalesReference: 640,
+    note: 'Minor loose change shortage of Rs. 120 during evening rush hour on Counter 02.',
+    closedAt: '2026-11-08T22:20:00.000Z',
+  },
+  {
+    id: 'gal_seed_main_03',
+    closingNumber: 'GAL-20261107-01',
+    date: '2026-11-07',
+    counterName: 'Main Counter',
+    shiftSlot: 'Full Day Shift',
+    closedByStaff: 'Dr. Zahid Hussain',
+    closedByRole: 'owner',
+    openingFloat: 5000,
+    cashPosSales: 18400,
+    cashPosInvoiceCount: 24,
+    cashKhataRecoveries: 250,
+    cashKhataRecoveryCount: 1,
+    dailyCashExpenses: 600,
+    dailyCashExpenseCount: 2,
+    expectedPhysicalCash: 23050, // 5000 + 18400 + 250 - 600
+    actualCashCounted: 23100,
+    varianceAmount: 50,
+    varianceStatus: 'surplus',
+    cashHandedToOwner: 18100,
+    closingFloatKeptInDrawer: 5000,
+    digitalSalesReference: 3100,
+    creditSalesReference: 1440,
+    note: 'Rs. 50 surplus from uncollected loose coins.',
+    closedAt: '2026-11-07T22:05:00.000Z',
+  },
+];
+
 
 
 
