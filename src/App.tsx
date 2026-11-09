@@ -742,8 +742,8 @@ export default function App() {
               sales={sales}
               pharmacyDetails={pharmacyDetails}
               onNavigateTab={setActiveTab}
-              onOpenMedicineModal={() => {
-                setSelectedMedicineForEdit(null);
+              onOpenMedicineModal={(med) => {
+                setSelectedMedicineForEdit(med || null);
                 setIsMedicineModalOpen(true);
               }}
             />

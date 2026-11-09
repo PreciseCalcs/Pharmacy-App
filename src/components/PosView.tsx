@@ -21,7 +21,8 @@ import {
   Baby,
   ShoppingBag,
   Pill,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Package
 } from 'lucide-react';
 import { 
   DosageForm, 
@@ -262,8 +263,8 @@ export const PosView: React.FC<PosViewProps> = ({
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      {/* Left Column: Medicine Catalog & Fast Scan (7 Cols) */}
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+      {/* Medicine Catalog & Fast Scan (7 Cols) */}
       <div className="lg:col-span-7 space-y-4">
         <div className="bg-white rounded-2xl shadow-2xs border border-slate-200 p-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
@@ -283,7 +284,7 @@ export const PosView: React.FC<PosViewProps> = ({
 
             <div className="flex items-center gap-2">
               <span className="hidden sm:inline-block text-[11px] text-slate-400 font-mono">
-                Press <kbd className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-300 font-bold">F2</kbd> to search
+                <kbd className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-300 font-bold">F2</kbd>
               </span>
               <button
                 type="button"
