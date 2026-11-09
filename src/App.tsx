@@ -33,7 +33,7 @@ import { staffAuth } from './services/staffAuth';
 import { soundService } from './services/soundAlerts';
 import { checkPocketBaseHealth } from './lib/pocketbase';
 import { parseScannedCode } from './utils/codeParser';
-import { canOpenTab, defaultTabFor } from './utils/permissions';
+import { can, canOpenTab, defaultTabFor } from './utils/permissions';
 
 // Views & Components
 import { DashboardView } from './components/DashboardView';
