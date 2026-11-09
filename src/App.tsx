@@ -188,10 +188,7 @@ export default function App() {
         }
         if (key === 's') {
           e.preventDefault();
-          setActiveTab('settings');
-          setIsMobileMenuOpen(false);
-          soundService.click();
-          showToast('⚡ Pharmacy Settings (Ctrl+S)', 'success');
+          handleNavigateTab('settings', '⚡ Pharmacy Settings (Ctrl+S)');
           return;
         }
         if (key === 'o') {
@@ -212,14 +209,16 @@ export default function App() {
         }
         if (key === 'r') {
           e.preventDefault();
-          setActiveTab('reports');
-          setIsMobileMenuOpen(false);
-          soundService.click();
-          showToast('⚡ Sales & Financial Reports (Ctrl+R)', 'success');
+          handleNavigateTab('reports', '⚡ Sales & Financial Reports (Ctrl+R)');
           return;
         }
         if (key === 'n') {
           e.preventDefault();
+          if (!can(currentUser.role, 'canEditInventory')) {
+            soundService.errorTone();
+            showToast('Access denied: Only Owner or Pharmacist can register products', 'warn');
+            return;
+          }
           setSelectedMedicineForEdit(null);
           setIsMedicineModalOpen(true);
           soundService.click();
