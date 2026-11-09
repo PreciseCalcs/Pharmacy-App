@@ -9,118 +9,164 @@
         "name": "name",
         "type": "text",
         "required": true,
-        "options": { "min": 2, "max": 200 }
+        "options": { "min": 1, "max": 200 }
       },
       {
-        "name": "generic_name",
+        "name": "genericName",
         "type": "text",
         "required": true,
-        "options": { "min": 2, "max": 200 }
-      },
-      {
-        "name": "sku",
-        "type": "text",
-        "required": true,
-        "options": { "min": 2, "max": 50 }
+        "options": { "min": 1, "max": 200 }
       },
       {
         "name": "barcode",
         "type": "text",
         "required": false,
-        "options": { "max": 50 }
+        "options": { "max": 100 }
+      },
+      {
+        "name": "sku",
+        "type": "text",
+        "required": true,
+        "options": { "min": 1, "max": 100 }
       },
       {
         "name": "category",
-        "type": "select",
-        "required": true,
-        "options": {
-          "maxSelect": 1,
-          "values": [
-            "Antibiotics",
-            "Analgesics & Antipyretics",
-            "Cardiovascular",
-            "Respiratory",
-            "Gastrointestinal",
-            "Endocrine & Diabetes",
-            "Dermatology",
-            "Vitamins & Supplements"
-          ]
-        }
-      },
-      {
-        "name": "dosage_form",
-        "type": "select",
-        "required": true,
-        "options": {
-          "maxSelect": 1,
-          "values": [
-            "Tablet",
-            "Capsule",
-            "Syrup",
-            "Suspension",
-            "Injection",
-            "Ointment",
-            "Drops",
-            "Inhaler"
-          ]
-        }
-      },
-      {
-        "name": "strength",
         "type": "text",
         "required": true,
-        "options": { "max": 50 }
+        "options": { "max": 100 }
       },
       {
-        "name": "unit_price",
-        "type": "number",
-        "required": true,
-        "options": { "min": 0 }
+        "name": "department",
+        "type": "text",
+        "required": false,
+        "options": { "max": 60 }
       },
       {
-        "name": "cost_price",
-        "type": "number",
-        "required": true,
-        "options": { "min": 0 }
-      },
-      {
-        "name": "stock_quantity",
-        "type": "number",
-        "required": true,
-        "options": { "min": 0 }
-      },
-      {
-        "name": "min_threshold",
-        "type": "number",
-        "required": true,
-        "options": { "min": 0 }
-      },
-      {
-        "name": "expiry_date",
-        "type": "date",
-        "required": true
-      },
-      {
-        "name": "batch_number",
+        "name": "dosageForm",
         "type": "text",
         "required": true,
         "options": { "max": 60 }
       },
       {
-        "name": "location_shelf",
+        "name": "strength",
         "type": "text",
         "required": false,
         "options": { "max": 100 }
       },
       {
-        "name": "is_prescription_required",
+        "name": "unitsPerPack",
+        "type": "number",
+        "required": true,
+        "options": { "min": 1 }
+      },
+      {
+        "name": "unitCostPrice",
+        "type": "number",
+        "required": true,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "unitRetailPrice",
+        "type": "number",
+        "required": true,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "looseCostPrice",
+        "type": "number",
+        "required": false,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "looseRetailPrice",
+        "type": "number",
+        "required": false,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "currentStockPacks",
+        "type": "number",
+        "required": true,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "currentStockLoose",
+        "type": "number",
+        "required": false,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "minThresholdPacks",
+        "type": "number",
+        "required": true,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "batchNumber",
+        "type": "text",
+        "required": true,
+        "options": { "max": 100 }
+      },
+      {
+        "name": "expiryDate",
+        "type": "text",
+        "required": true,
+        "options": { "max": 40 }
+      },
+      {
+        "name": "shelfLocation",
+        "type": "text",
+        "required": false,
+        "options": { "max": 100 }
+      },
+      {
+        "name": "manufacturer",
+        "type": "text",
+        "required": false,
+        "options": { "max": 150 }
+      },
+      {
+        "name": "requiresPrescription",
         "type": "bool",
+        "required": false
+      },
+      {
+        "name": "supplier",
+        "type": "text",
+        "required": false,
+        "options": { "max": 150 }
+      },
+      {
+        "name": "sideEffects",
+        "type": "text",
+        "required": false
+      },
+      {
+        "name": "precautions",
+        "type": "text",
         "required": false
       },
       {
         "name": "notes",
         "type": "text",
         "required": false
+      },
+      {
+        "name": "imageUrl",
+        "type": "text",
+        "required": false
+      },
+      {
+        "name": "reorderStatus",
+        "type": "text",
+        "required": false,
+        "options": { "max": 30 }
+      },
+      {
+        "name": "orderedAt",
+        "type": "text",
+        "required": false,
+        "options": { "max": 60 }
       }
     ],
     "indexes": [
@@ -130,44 +176,63 @@
     ],
     "listRule": "",
     "viewRule": "",
-    "createRule": "@request.auth.id != ''",
-    "updateRule": "@request.auth.id != ''",
-    "deleteRule": "@request.auth.id != ''"
+    "createRule": "",
+    "updateRule": "",
+    "deleteRule": ""
   },
   {
-    "id": "col_transactions_pharmacy",
-    "name": "transactions",
+    "id": "col_sales_pharmacy",
+    "name": "sales",
     "type": "base",
     "system": false,
     "schema": [
       {
-        "name": "transaction_number",
+        "name": "invoiceNumber",
         "type": "text",
-        "required": true
-      },
-      {
-        "name": "customer_name",
-        "type": "text",
-        "required": true
-      },
-      {
-        "name": "customer_phone",
-        "type": "text",
-        "required": false
-      },
-      {
-        "name": "pharmacist_name",
-        "type": "text",
-        "required": true
-      },
-      {
-        "name": "payment_method",
-        "type": "select",
         "required": true,
-        "options": {
-          "maxSelect": 1,
-          "values": ["Cash", "Card", "Insurance", "Mobile Payment"]
-        }
+        "options": { "max": 80 }
+      },
+      {
+        "name": "customerName",
+        "type": "text",
+        "required": true,
+        "options": { "max": 150 }
+      },
+      {
+        "name": "customerPhone",
+        "type": "text",
+        "required": false,
+        "options": { "max": 60 }
+      },
+      {
+        "name": "customerId",
+        "type": "text",
+        "required": false,
+        "options": { "max": 80 }
+      },
+      {
+        "name": "counterName",
+        "type": "text",
+        "required": false,
+        "options": { "max": 100 }
+      },
+      {
+        "name": "staffName",
+        "type": "text",
+        "required": true,
+        "options": { "max": 120 }
+      },
+      {
+        "name": "staffRole",
+        "type": "text",
+        "required": true,
+        "options": { "max": 40 }
+      },
+      {
+        "name": "paymentMethod",
+        "type": "text",
+        "required": true,
+        "options": { "max": 40 }
       },
       {
         "name": "items",
@@ -177,89 +242,228 @@
       {
         "name": "subtotal",
         "type": "number",
-        "required": true
+        "required": true,
+        "options": { "min": 0 }
       },
       {
-        "name": "tax",
+        "name": "discountPercent",
         "type": "number",
-        "required": true
+        "required": false,
+        "options": { "min": 0 }
       },
       {
-        "name": "discount",
+        "name": "discountAmount",
+        "type": "number",
+        "required": false,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "totalAmount",
+        "type": "number",
+        "required": true,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "totalProfit",
         "type": "number",
         "required": false
       },
       {
-        "name": "total_amount",
+        "name": "receivedAmount",
         "type": "number",
-        "required": true
+        "required": false,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "changeAmount",
+        "type": "number",
+        "required": false,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "required": true,
+        "options": { "max": 40 }
       },
       {
         "name": "notes",
         "type": "text",
         "required": false
+      },
+      {
+        "name": "createdAt",
+        "type": "text",
+        "required": true,
+        "options": { "max": 60 }
       }
     ],
     "indexes": [
-      "CREATE UNIQUE INDEX `idx_txn_num` ON `transactions` (`transaction_number`)"
+      "CREATE UNIQUE INDEX `idx_sales_invoice` ON `sales` (`invoiceNumber`)"
     ],
-    "listRule": "@request.auth.id != ''",
-    "viewRule": "@request.auth.id != ''",
+    "listRule": "",
+    "viewRule": "",
     "createRule": "",
-    "updateRule": null,
-    "deleteRule": null
+    "updateRule": "",
+    "deleteRule": ""
   },
   {
-    "id": "col_stock_adjustments",
-    "name": "stock_adjustments",
+    "id": "col_customers_khata",
+    "name": "customers_khata",
     "type": "base",
     "system": false,
     "schema": [
       {
-        "name": "medicine_id",
+        "name": "name",
         "type": "text",
-        "required": true
+        "required": true,
+        "options": { "max": 150 }
       },
       {
-        "name": "medicine_name",
+        "name": "phone",
         "type": "text",
-        "required": true
+        "required": true,
+        "options": { "max": 60 }
       },
       {
-        "name": "batch_number",
+        "name": "address",
         "type": "text",
-        "required": true
+        "required": false,
+        "options": { "max": 250 }
       },
       {
-        "name": "previous_stock",
+        "name": "balanceDue",
         "type": "number",
+        "required": true,
+        "options": { "min": 0 }
+      },
+      {
+        "name": "history",
+        "type": "json",
         "required": true
       },
       {
-        "name": "new_stock",
-        "type": "number",
-        "required": true
-      },
-      {
-        "name": "change_amount",
-        "type": "number",
-        "required": true
-      },
-      {
-        "name": "reason",
+        "name": "updatedAt",
         "type": "text",
-        "required": true
+        "required": false,
+        "options": { "max": 60 }
       },
       {
-        "name": "pharmacist_name",
+        "name": "createdAt",
         "type": "text",
-        "required": true
+        "required": false,
+        "options": { "max": 60 }
       }
     ],
-    "listRule": "@request.auth.id != ''",
-    "viewRule": "@request.auth.id != ''",
+    "indexes": [
+      "CREATE INDEX `idx_khata_phone` ON `customers_khata` (`phone`)",
+      "CREATE INDEX `idx_khata_name` ON `customers_khata` (`name`)"
+    ],
+    "listRule": "",
+    "viewRule": "",
     "createRule": "",
-    "updateRule": null,
-    "deleteRule": null
+    "updateRule": "",
+    "deleteRule": ""
+  },
+  {
+    "id": "col_pharmacy_settings",
+    "name": "pharmacy_settings",
+    "type": "base",
+    "system": false,
+    "schema": [
+      {
+        "name": "name",
+        "type": "text",
+        "required": true,
+        "options": { "max": 200 }
+      },
+      {
+        "name": "address",
+        "type": "text",
+        "required": true,
+        "options": { "max": 250 }
+      },
+      {
+        "name": "city",
+        "type": "text",
+        "required": true,
+        "options": { "max": 120 }
+      },
+      {
+        "name": "drugLicenceNumber",
+        "type": "text",
+        "required": true,
+        "options": { "max": 100 }
+      },
+      {
+        "name": "ntnNumber",
+        "type": "text",
+        "required": false,
+        "options": { "max": 100 }
+      },
+      {
+        "name": "phone",
+        "type": "text",
+        "required": true,
+        "options": { "max": 60 }
+      },
+      {
+        "name": "emergencyPhone",
+        "type": "text",
+        "required": false,
+        "options": { "max": 60 }
+      },
+      {
+        "name": "ownerName",
+        "type": "text",
+        "required": false,
+        "options": { "max": 150 }
+      },
+      {
+        "name": "ownerTitle",
+        "type": "text",
+        "required": false,
+        "options": { "max": 100 }
+      },
+      {
+        "name": "ownerPhone",
+        "type": "text",
+        "required": false,
+        "options": { "max": 60 }
+      },
+      {
+        "name": "ownerEmail",
+        "type": "text",
+        "required": false,
+        "options": { "max": 150 }
+      },
+      {
+        "name": "logoUrl",
+        "type": "text",
+        "required": false
+      },
+      {
+        "name": "tagline",
+        "type": "text",
+        "required": false,
+        "options": { "max": 250 }
+      },
+      {
+        "name": "thankYouMessage",
+        "type": "text",
+        "required": false
+      },
+      {
+        "name": "pocketBaseUrl",
+        "type": "text",
+        "required": false,
+        "options": { "max": 200 }
+      }
+    ],
+    "listRule": "",
+    "viewRule": "",
+    "createRule": "",
+    "updateRule": "",
+    "deleteRule": ""
   }
 ]

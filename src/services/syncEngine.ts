@@ -153,7 +153,7 @@ export class PharmacySyncEngine {
     this.notify();
 
     try {
-      await pb.collection('pharmacy_settings').create(this.pharmacyDetails);
+      await this.syncSettingsRecord(this.pharmacyDetails);
     } catch {}
 
     return this.pharmacyDetails;
@@ -254,7 +254,7 @@ export class PharmacySyncEngine {
     this.notify();
 
     try {
-      await pb.collection('customers_khata').create(newCustomer);
+      await this.upsertPbRecord('customers_khata', newCustomer.id, newCustomer);
     } catch {}
 
     return newCustomer;
@@ -285,11 +285,14 @@ export class PharmacySyncEngine {
 
     customer.history.unshift(entry);
     this.saveKhata();
-    this.enqueueOutbox('RECORD_KHATA_PAYMENT', { customerId, entry, newBalance: customer.balanceDue });
+    this.enqueueOutbox('RECORD_KHATA_PAYMENT', {
+      customerId,
+      customer: { ...customer },
+    });
     this.notify();
 
     try {
-      await pb.collection('customers_khata').update(customerId, customer);
+      await this.upsertPbRecord('customers_khata', customerId, customer);
     } catch {}
 
     return customer;
@@ -321,11 +324,14 @@ export class PharmacySyncEngine {
 
     customer.history.unshift(entry);
     this.saveKhata();
-    this.enqueueOutbox('RECORD_KHATA_SALE', { customerId, entry, newBalance: customer.balanceDue });
+    this.enqueueOutbox('RECORD_KHATA_SALE', {
+      customerId,
+      customer: { ...customer },
+    });
     this.notify();
 
     try {
-      await pb.collection('customers_khata').update(customerId, customer);
+      await this.upsertPbRecord('customers_khata', customerId, customer);
     } catch {}
 
     return customer;
@@ -338,7 +344,7 @@ export class PharmacySyncEngine {
     this.notify();
 
     try {
-      await pb.collection('customers_khata').delete(customerId);
+      await pb.collection('customers_khata').delete(this.toPbId(customerId));
     } catch {}
 
     return true;
@@ -447,7 +453,7 @@ export class PharmacySyncEngine {
     this.notify();
 
     try {
-      await pb.collection('medicines').create(newItem);
+      await this.upsertPbRecord('medicines', newItem.id, newItem);
     } catch {}
 
     return newItem;
@@ -480,11 +486,11 @@ export class PharmacySyncEngine {
 
     this.medicines[idx] = updated;
     this.saveMedicines();
-    this.enqueueOutbox('UPDATE_MEDICINE', { id, updates: finalUpdates });
+    this.enqueueOutbox('UPDATE_MEDICINE', { id, updates: finalUpdates, fullItem: updated });
     this.notify();
 
     try {
-      await pb.collection('medicines').update(id, updates);
+      await this.upsertPbRecord('medicines', id, updated);
     } catch {}
 
     return updated;
@@ -497,7 +503,7 @@ export class PharmacySyncEngine {
     this.notify();
 
     try {
-      await pb.collection('medicines').delete(id);
+      await pb.collection('medicines').delete(this.toPbId(id));
     } catch {}
 
     return true;
@@ -554,7 +560,7 @@ export class PharmacySyncEngine {
           updated: nowIso,
         };
         this.medicines[existingIdx] = merged;
-        this.enqueueOutbox('UPDATE_MEDICINE', { id: current.id, updates: raw });
+        this.enqueueOutbox('UPDATE_MEDICINE', { id: current.id, updates: raw, fullItem: merged });
         updated++;
       } else {
         const units = Number(raw.unitsPerPack) > 0 ? Number(raw.unitsPerPack) : 1;
@@ -759,6 +765,10 @@ export class PharmacySyncEngine {
           note: notes,
         });
         this.saveKhata();
+        this.enqueueOutbox('RECORD_KHATA_SALE', {
+          customerId: targetCustomer.id,
+          customer: { ...targetCustomer },
+        });
       } else if (customerName && customerName !== 'Walk-in Customer') {
         const newKhata: CustomerKhata = {
           id: `kht_${Date.now()}`,
@@ -781,6 +791,7 @@ export class PharmacySyncEngine {
         };
         this.khataCustomers.unshift(newKhata);
         this.saveKhata();
+        this.enqueueOutbox('ADD_KHATA_CUSTOMER', newKhata);
       }
     }
 
@@ -793,14 +804,21 @@ export class PharmacySyncEngine {
 
     // 4. Push to PocketBase live collection if available
     try {
-      await pb.collection('sales').create(newTransaction);
+      await this.upsertPbRecord('sales', newTransaction.id, newTransaction);
       for (const item of items) {
         const med = this.medicines.find((m) => m.id === item.medicineId);
         if (med) {
-          await pb.collection('medicines').update(med.id, {
-            currentStockPacks: med.currentStockPacks,
-            currentStockLoose: med.currentStockLoose,
-          });
+          await this.upsertPbRecord('medicines', med.id, med);
+        }
+      }
+      if (paymentMethod === 'Credit') {
+        const syncedCustomer = this.khataCustomers.find(
+          (c) =>
+            (customerId && c.id === customerId) ||
+            c.name.toLowerCase() === customerName.trim().toLowerCase()
+        );
+        if (syncedCustomer) {
+          await this.upsertPbRecord('customers_khata', syncedCustomer.id, syncedCustomer);
         }
       }
     } catch (err) {
@@ -812,6 +830,50 @@ export class PharmacySyncEngine {
 
   public async linkBarcode(medicineId: string, newBarcode: string): Promise<MedicineItem> {
     return this.updateMedicine(medicineId, { barcode: newBarcode.trim() });
+  }
+
+  /**
+   * Normalizes any local string ID into a deterministic 15-character lowercase alphanumeric ID
+   * required by PocketBase's primary key constraint (`[a-z0-9]{15}`).
+   */
+  private toPbId(rawId: string): string {
+    const clean = (rawId || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (clean.length === 15) return clean;
+    if (clean.length > 15) {
+      // Combine prefix and suffix so timestamps + random suffixes stay unique
+      return clean.slice(0, 7) + clean.slice(-8);
+    }
+    // Pad deterministically to 15 chars
+    const padSource = 'zms0123456789pb';
+    return (clean + padSource).slice(0, 15);
+  }
+
+  /**
+   * Upserts a record into a PocketBase collection using deterministic 15-char IDs
+   */
+  private async upsertPbRecord(
+    collectionName: string,
+    rawId: string,
+    data: Record<string, any>
+  ): Promise<void> {
+    const pbId = this.toPbId(rawId);
+    const { id: _ignoredId, created: _c, updated: _u, ...rest } = data;
+    try {
+      await pb.collection(collectionName).update(pbId, rest);
+    } catch {
+      await pb.collection(collectionName).create({
+        id: pbId,
+        ...rest,
+      });
+    }
+  }
+
+  /**
+   * Upserts the singleton pharmacy_settings record in PocketBase
+   */
+  private async syncSettingsRecord(details: PharmacyDetails): Promise<void> {
+    const settingsId = this.toPbId('zms_settings_singleton');
+    await this.upsertPbRecord('pharmacy_settings', settingsId, details as Record<string, any>);
   }
 
   // Full Outbox sync when PocketBase is reachable
@@ -827,22 +889,91 @@ export class PharmacySyncEngine {
 
     for (const item of this.outbox) {
       try {
-        if (item.action === 'PROCESS_SALE') {
-          await pb.collection('sales').create(item.payload as Record<string, any>);
-        } else if (item.action === 'ADD_MEDICINE') {
-          await pb.collection('medicines').create(item.payload as Record<string, any>);
-        } else if (item.action === 'UPDATE_MEDICINE') {
-          const { id, updates } = item.payload as any;
-          await pb.collection('medicines').update(id, updates);
-        } else if (item.action === 'DELETE_MEDICINE') {
-          const { id } = item.payload as any;
-          await pb.collection('medicines').delete(id);
-        } else if (item.action === 'UPDATE_SETTINGS') {
-          await pb.collection('pharmacy_settings').create(item.payload as Record<string, any>);
+        switch (item.action) {
+          case 'PROCESS_SALE': {
+            const sale = item.payload as SaleTransaction;
+            await this.upsertPbRecord('sales', sale.id, sale as Record<string, any>);
+            // Also ensure updated stock levels for sold items are synced to PocketBase
+            if (Array.isArray(sale.items)) {
+              for (const soldItem of sale.items) {
+                const currentMed = this.medicines.find((m) => m.id === soldItem.medicineId);
+                if (currentMed) {
+                  await this.upsertPbRecord('medicines', currentMed.id, currentMed);
+                }
+              }
+            }
+            break;
+          }
+          case 'ADD_MEDICINE': {
+            const med = item.payload as MedicineItem;
+            await this.upsertPbRecord('medicines', med.id, med as Record<string, any>);
+            break;
+          }
+          case 'UPDATE_MEDICINE': {
+            const { id, updates, fullItem } = item.payload as {
+              id: string;
+              updates: Partial<MedicineItem>;
+              fullItem?: MedicineItem;
+            };
+            const targetMed = fullItem || this.medicines.find((m) => m.id === id);
+            if (targetMed) {
+              await this.upsertPbRecord('medicines', id, targetMed as Record<string, any>);
+            } else {
+              await pb.collection('medicines').update(this.toPbId(id), updates);
+            }
+            break;
+          }
+          case 'DELETE_MEDICINE': {
+            const { id } = item.payload as { id: string };
+            try {
+              await pb.collection('medicines').delete(this.toPbId(id));
+            } catch {}
+            break;
+          }
+          case 'ADD_KHATA_CUSTOMER': {
+            const customer = item.payload as CustomerKhata;
+            await this.upsertPbRecord(
+              'customers_khata',
+              customer.id,
+              customer as Record<string, any>
+            );
+            break;
+          }
+          case 'RECORD_KHATA_PAYMENT':
+          case 'RECORD_KHATA_SALE': {
+            const { customerId, customer } = item.payload as {
+              customerId: string;
+              customer?: CustomerKhata;
+            };
+            const targetCustomer =
+              customer || this.khataCustomers.find((c) => c.id === customerId);
+            if (targetCustomer) {
+              await this.upsertPbRecord(
+                'customers_khata',
+                customerId,
+                targetCustomer as Record<string, any>
+              );
+            }
+            break;
+          }
+          case 'DELETE_KHATA_CUSTOMER': {
+            const { customerId } = item.payload as { customerId: string };
+            try {
+              await pb.collection('customers_khata').delete(this.toPbId(customerId));
+            } catch {}
+            break;
+          }
+          case 'UPDATE_SETTINGS': {
+            const details = item.payload as PharmacyDetails;
+            await this.syncSettingsRecord(details);
+            break;
+          }
+          default:
+            break;
         }
         synced++;
       } catch (err) {
-        console.warn('Outbox item push failed:', err);
+        console.warn(`Outbox item push failed (${item.action}):`, err);
         failed++;
         remainingOutbox.push(item);
       }
