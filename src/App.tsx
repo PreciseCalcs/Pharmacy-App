@@ -109,6 +109,32 @@ export default function App() {
     });
   }, []);
 
+  const showToast = useCallback((message: string, type: 'success' | 'warn') => {
+    setScanToast({ message, type });
+    setTimeout(() => {
+      setScanToast(null);
+    }, 3000);
+  }, []);
+
+  const handleNavigateTab = useCallback(
+    (tab: string, shortcutLabel?: string) => {
+      // Allow 'settings' tab click because SettingsView has a dedicated Owner PIN challenge screen,
+      // but enforce role permissions strictly on all other tabs (e.g. 'reports' blocked for Cashier).
+      if (tab !== 'settings' && !canOpenTab(currentUser.role, tab)) {
+        soundService.errorTone();
+        showToast(`Access denied: ${currentUser.role} role cannot open ${tab}`, 'warn');
+        return;
+      }
+      setActiveTab(tab);
+      setIsMobileMenuOpen(false);
+      soundService.click();
+      if (shortcutLabel) {
+        showToast(shortcutLabel, 'success');
+      }
+    },
+    [currentUser.role, showToast]
+  );
+  
   // SyncEngine Subscription
   useEffect(() => {
     refreshHealth();
