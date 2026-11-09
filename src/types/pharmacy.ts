@@ -92,6 +92,8 @@ export interface MedicineItem {
   precautions?: string;
   notes?: string;
   imageUrl?: string; // Product photo URL / base64 image data
+  reorderStatus?: 'needed' | 'ordered';
+  orderedAt?: string;
   created?: string;
   updated?: string;
 }

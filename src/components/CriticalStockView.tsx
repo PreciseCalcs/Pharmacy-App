@@ -1,42 +1,44 @@
 import React, { useState, useMemo } from 'react';
-import { 
-  ShieldAlert, 
-  Download, 
-  FileSpreadsheet, 
-  Search, 
-  Edit3, 
-  Package, 
-  AlertTriangle, 
-  CheckCircle2, 
-  Layers, 
-  Heart, 
-  Baby, 
-  ShoppingBag, 
-  Pill, 
-  Building2, 
+import {
+  ShieldAlert,
+  Download,
+  FileSpreadsheet,
+  Search,
+  Edit3,
+  CheckCircle2,
+  Layers,
+  Heart,
+  Baby,
+  ShoppingBag,
+  Pill,
   Filter,
-  ArrowUpDown
+  CheckSquare,
+  Square,
+  Truck,
+  RotateCcw,
 } from 'lucide-react';
 import { MedicineItem } from '../types/pharmacy';
-import { formatPKR } from '../utils/pharmacyHelpers';
 import { exportCriticalStockToExcel, exportCriticalStockToCSV } from '../services/excelExporter';
 import { soundService } from '../services/soundAlerts';
 
 interface CriticalStockViewProps {
   medicines: MedicineItem[];
+  onUpdateMedicine: (id: string, updates: Partial<MedicineItem>) => Promise<MedicineItem>;
   onOpenMedicineModal: (med: MedicineItem) => void;
   canEdit: boolean;
 }
 
 export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
   medicines,
+  onUpdateMedicine,
   onOpenMedicineModal,
   canEdit,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
+  const [selectedDepartment] = useState<string>('all');
   const [urgencyFilter, setUrgencyFilter] = useState<'all' | 'out_of_stock' | 'severe'>('all');
+  const [reorderStatusFilter, setReorderStatusFilter] = useState<'all' | 'needed' | 'ordered'>('all');
   const [groupByCategory, setGroupByCategory] = useState(false);
 
   // Filter medicines below their reorder threshold
@@ -50,6 +52,7 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
         const percentOfThreshold = Math.round((current / threshold) * 100);
         const isOutOfStock = current === 0;
         const reorderCost = deficit * (m.unitCostPrice || 0);
+        const isOrdered = m.reorderStatus === 'ordered';
 
         return {
           ...m,
@@ -59,6 +62,7 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
           percentOfThreshold,
           isOutOfStock,
           reorderCost,
+          isOrdered,
         };
       })
       .sort((a, b) => {
@@ -81,6 +85,8 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
   // Overall KPI metrics
   const totalCriticalCount = criticalItems.length;
   const outOfStockCount = useMemo(() => criticalItems.filter((m) => m.isOutOfStock).length, [criticalItems]);
+  const orderedCount = useMemo(() => criticalItems.filter((m) => m.isOrdered).length, [criticalItems]);
+  const pendingOrderCount = totalCriticalCount - orderedCount;
   const totalDeficitPacks = useMemo(() => criticalItems.reduce((acc, m) => acc + m.deficit, 0), [criticalItems]);
   const totalEstimatedCost = useMemo(() => criticalItems.reduce((acc, m) => acc + m.reorderCost, 0), [criticalItems]);
 
@@ -95,9 +101,10 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
       // Department filter
       if (selectedDepartment !== 'all') {
         if (selectedDepartment === 'pharmacy') {
-          const isOther = m.department === 'personal_care' || 
-            m.department === 'mother_baby' || 
-            m.department === 'general_store' || 
+          const isOther =
+            m.department === 'personal_care' ||
+            m.department === 'mother_baby' ||
+            m.department === 'general_store' ||
             m.department === 'surgical' ||
             m.category === 'Personal Care & Sexual Wellness' ||
             m.category === 'Baby & Mother Care' ||
@@ -119,6 +126,10 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
       if (urgencyFilter === 'out_of_stock' && !m.isOutOfStock) return false;
       if (urgencyFilter === 'severe' && m.percentOfThreshold > 50) return false;
 
+      // Reorder status filter
+      if (reorderStatusFilter === 'needed' && m.isOrdered) return false;
+      if (reorderStatusFilter === 'ordered' && !m.isOrdered) return false;
+
       // Search term
       if (searchTerm.trim()) {
         const q = searchTerm.toLowerCase().trim();
@@ -133,7 +144,39 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
 
       return true;
     });
-  }, [criticalItems, selectedCategory, selectedDepartment, urgencyFilter, searchTerm]);
+  }, [criticalItems, selectedCategory, selectedDepartment, urgencyFilter, reorderStatusFilter, searchTerm]);
+
+  // Toggle single item reorder status
+  const handleToggleOrdered = async (med: MedicineItem) => {
+    const nextOrdered = med.reorderStatus !== 'ordered';
+    soundService.click();
+    await onUpdateMedicine(med.id, {
+      reorderStatus: nextOrdered ? 'ordered' : 'needed',
+      orderedAt: nextOrdered ? new Date().toISOString() : undefined,
+    });
+  };
+
+  // Toggle all currently filtered items
+  const allFilteredOrdered = useMemo(
+    () => filteredItems.length > 0 && filteredItems.every((m) => m.isOrdered),
+    [filteredItems]
+  );
+
+  const handleToggleAllFiltered = async () => {
+    if (filteredItems.length === 0) return;
+    soundService.click();
+    const targetStatus: 'needed' | 'ordered' = allFilteredOrdered ? 'needed' : 'ordered';
+    const nowIso = targetStatus === 'ordered' ? new Date().toISOString() : undefined;
+
+    for (const item of filteredItems) {
+      if ((item.reorderStatus === 'ordered') !== (targetStatus === 'ordered')) {
+        await onUpdateMedicine(item.id, {
+          reorderStatus: targetStatus,
+          orderedAt: nowIso,
+        });
+      }
+    }
+  };
 
   // Grouped items by category if grouping is active
   const groupedItems = useMemo(() => {
@@ -181,16 +224,52 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
                     {outOfStockCount} Out of Stock
                   </span>
                 )}
+                {orderedCount > 0 && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-1">
+                    <Truck className="w-3.5 h-3.5" />
+                    <span>{orderedCount} Ordered</span>
+                  </span>
+                )}
               </div>
               <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                Generate and export supplier purchase orders for items below their safety reorder buffer.
+                Track supplier purchase orders, mark requested items as ordered, and export category reorder sheets.
               </p>
             </div>
           </div>
 
           {/* Export Action Buttons */}
           <div className="flex items-center gap-2 flex-wrap">
+            {canEdit && filteredItems.length > 0 && (
+              <button
+                type="button"
+                onClick={handleToggleAllFiltered}
+                className={`px-3.5 py-2 rounded-xl border font-bold text-xs flex items-center gap-1.5 transition shadow-2xs ${
+                  allFilteredOrdered
+                    ? 'border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700'
+                    : 'border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800'
+                }`}
+                title={
+                  allFilteredOrdered
+                    ? 'Reset ordered status on all shown items'
+                    : 'Mark all shown items as Ordered from supplier'
+                }
+              >
+                {allFilteredOrdered ? (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Clear Ordered ({filteredItems.length})</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckSquare className="w-3.5 h-3.5" />
+                    <span>Mark All Shown Ordered</span>
+                  </>
+                )}
+              </button>
+            )}
+
             <button
+              type="button"
               onClick={handleExportCSV}
               disabled={filteredItems.length === 0}
               className="px-3.5 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center gap-1.5 transition shadow-2xs disabled:opacity-50"
@@ -201,6 +280,7 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
             </button>
 
             <button
+              type="button"
               onClick={handleExportExcel}
               disabled={filteredItems.length === 0}
               className="px-4 py-2 rounded-xl bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-xs flex items-center gap-1.5 transition shadow-md shadow-emerald-950/20 disabled:opacity-50"
@@ -213,7 +293,7 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
         </div>
 
         {/* 2. KPI Summary Metrics Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-4 border-t border-slate-100">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-5 pt-4 border-t border-slate-100">
           <div className="p-3 bg-rose-50/50 rounded-xl border border-rose-100">
             <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700 block">
               Items Below Buffer
@@ -232,6 +312,20 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
             </span>
           </div>
 
+          <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-200">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-800 block">
+              Reorder Status
+            </span>
+            <div className="flex items-baseline gap-1.5 mt-0.5">
+              <span className="text-xl sm:text-2xl font-black text-emerald-700 font-mono">
+                {orderedCount}
+              </span>
+              <span className="text-xs font-bold text-slate-500">
+                ordered / {pendingOrderCount} pending
+              </span>
+            </div>
+          </div>
+
           <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200">
             <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">
               Total Deficit Quantity
@@ -241,7 +335,7 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
             </span>
           </div>
 
-          <div className="p-3 bg-emerald-50/60 rounded-xl border border-emerald-200">
+          <div className="p-3 bg-emerald-50/60 rounded-xl border border-emerald-200 col-span-2 sm:col-span-1">
             <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 block">
               Est. Reorder Budget
             </span>
@@ -270,6 +364,7 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
           {/* Group by category toggle & Category Selector */}
           <div className="flex items-center gap-2 flex-wrap text-xs">
             <button
+              type="button"
               onClick={() => {
                 setGroupByCategory(!groupByCategory);
                 soundService.click();
@@ -299,30 +394,62 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
           </div>
         </div>
 
-        {/* Sub-Filters: Urgency & Departments */}
-        <div className="flex items-center justify-between gap-2 flex-wrap pt-2 border-t border-slate-100 text-xs">
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-            <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
-              <Filter className="w-3 h-3" />
-              <span>Urgency:</span>
-            </span>
-            {[
-              { id: 'all', label: 'All Critical' },
-              { id: 'out_of_stock', label: `Out of Stock (${outOfStockCount})` },
-              { id: 'severe', label: 'Severe (<50% Threshold)' },
-            ].map(({ id, label }) => (
-              <button
-                key={id}
-                onClick={() => setUrgencyFilter(id as any)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
-                  urgencyFilter === id
-                    ? 'bg-rose-600 text-white'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+        {/* Sub-Filters: Urgency & Reorder Status */}
+        <div className="flex items-center justify-between gap-3 flex-wrap pt-2 border-t border-slate-100 text-xs">
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Urgency Filter */}
+            <div className="flex items-center gap-1.5 overflow-x-auto">
+              <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
+                <Filter className="w-3 h-3" />
+                <span>Urgency:</span>
+              </span>
+              {[
+                { id: 'all', label: 'All Critical' },
+                { id: 'out_of_stock', label: `Out of Stock (${outOfStockCount})` },
+                { id: 'severe', label: 'Severe (<50%)' },
+              ].map(({ id, label }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setUrgencyFilter(id as any)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
+                    urgencyFilter === id
+                      ? 'bg-rose-600 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <span className="hidden sm:inline-block text-slate-300">|</span>
+
+            {/* Reorder Status Filter */}
+            <div className="flex items-center gap-1.5 overflow-x-auto">
+              <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
+                <Truck className="w-3 h-3" />
+                <span>Order Status:</span>
+              </span>
+              {[
+                { id: 'all', label: 'All' },
+                { id: 'needed', label: `Needs Order (${pendingOrderCount})` },
+                { id: 'ordered', label: `Ordered (${orderedCount})` },
+              ].map(({ id, label }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setReorderStatusFilter(id as any)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
+                    reorderStatusFilter === id
+                      ? 'bg-emerald-700 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="text-xs text-slate-500 font-medium">
@@ -335,9 +462,9 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
       {filteredItems.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center shadow-2xs">
           <CheckCircle2 className="w-12 h-12 mx-auto text-emerald-500 mb-3 stroke-1" />
-          <h3 className="text-base font-bold text-slate-900">No Critical Stock Alerts Found</h3>
+          <h3 className="text-base font-bold text-slate-900">No Matching Critical Stock Items</h3>
           <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
-            All items matching your active category and search filter have stock levels safely above their reorder thresholds.
+            No items match your active category, order status, or search filter.
           </p>
         </div>
       ) : groupByCategory && groupedItems ? (
@@ -346,16 +473,22 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
           {Array.from(groupedItems.entries()).map(([catName, items]) => {
             const catCost = items.reduce((sum, item) => sum + item.reorderCost, 0);
             const catDeficit = items.reduce((sum, item) => sum + item.deficit, 0);
+            const catOrdered = items.filter((item) => item.isOrdered).length;
 
             return (
               <div key={catName} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
-                <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+                <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
                   <div className="flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-rose-500"></span>
                     <h3 className="font-bold text-slate-900 text-sm">{catName}</h3>
                     <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-bold">
                       {items.length} {items.length === 1 ? 'item' : 'items'}
                     </span>
+                    {catOrdered > 0 && (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                        {catOrdered} ordered
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3 text-xs">
@@ -372,16 +505,19 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
                       <tr className="border-b border-slate-100 bg-slate-50/50 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
+                        <th className="py-2.5 px-3 w-10 text-center">Ordered</th>
                         <th className="py-2.5 px-3">Product Description</th>
                         <th className="py-2.5 px-3">Location & Supplier</th>
                         <th className="py-2.5 px-3 text-center">Stock / Buffer</th>
                         <th className="py-2.5 px-3 text-right">Reorder Qty</th>
                         <th className="py-2.5 px-3 text-right">Est. Cost</th>
-                        <th className="py-2.5 px-3 text-center">Action</th>
+                        <th className="py-2.5 px-3 text-center">Reorder Status & Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {items.map((med) => renderTableRow(med, onOpenMedicineModal))}
+                      {items.map((med) =>
+                        renderTableRow(med, onOpenMedicineModal, handleToggleOrdered, false)
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -396,17 +532,28 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 uppercase text-[10px] tracking-wider font-bold">
+                  <th className="py-3 px-3 w-10 text-center">
+                    <input
+                      type="checkbox"
+                      checked={allFilteredOrdered}
+                      onChange={handleToggleAllFiltered}
+                      className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600"
+                      title="Toggle ordered status for all visible items"
+                    />
+                  </th>
                   <th className="py-3 px-3.5">Product Description</th>
                   <th className="py-3 px-3">Category</th>
                   <th className="py-3 px-3">Location & Supplier</th>
                   <th className="py-3 px-3 text-center">Current / Safety Threshold</th>
                   <th className="py-3 px-3 text-right">Deficit to Order</th>
                   <th className="py-3 px-3 text-right">Est. Budget</th>
-                  <th className="py-3 px-3 text-center">Action</th>
+                  <th className="py-3 px-3 text-center">Reorder Status & Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredItems.map((med) => renderTableRow(med, onOpenMedicineModal, true))}
+                {filteredItems.map((med) =>
+                  renderTableRow(med, onOpenMedicineModal, handleToggleOrdered, true)
+                )}
               </tbody>
             </table>
           </div>
@@ -424,16 +571,42 @@ function renderTableRow(
     percentOfThreshold: number;
     isOutOfStock: boolean;
     reorderCost: number;
+    isOrdered: boolean;
   },
   onOpenMedicineModal: (med: MedicineItem) => void,
+  onToggleOrdered: (med: MedicineItem) => void,
   showCategory: boolean = false
 ) {
   const isOut = med.isOutOfStock;
+  const isOrdered = med.isOrdered;
   const percent = Math.min(100, Math.max(0, med.percentOfThreshold));
   const barColor = isOut ? 'bg-rose-600' : percent <= 35 ? 'bg-rose-500' : 'bg-amber-500';
 
+  const formattedOrderDate = med.orderedAt
+    ? new Date(med.orderedAt).toLocaleDateString('en-PK', {
+        month: 'short',
+        day: 'numeric',
+      })
+    : null;
+
   return (
-    <tr key={med.id} className="hover:bg-slate-50/70 transition">
+    <tr
+      key={med.id}
+      className={`transition ${
+        isOrdered ? 'bg-emerald-50/30 hover:bg-emerald-50/50' : 'hover:bg-slate-50/70'
+      }`}
+    >
+      {/* Checkbox Column */}
+      <td className="py-3 px-3 text-center">
+        <input
+          type="checkbox"
+          checked={isOrdered}
+          onChange={() => onToggleOrdered(med)}
+          aria-label={`Mark ${med.name} as ordered`}
+          className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600"
+        />
+      </td>
+
       {/* Product Description */}
       <td className="py-3 px-3.5">
         <div className="flex items-center gap-2.5">
@@ -455,8 +628,19 @@ function renderTableRow(
             )}
           </div>
           <div>
-            <div className="font-bold text-slate-900 text-xs sm:text-sm">
-              {med.name}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span
+                className={`font-bold text-xs sm:text-sm ${
+                  isOrdered ? 'text-slate-700 line-through decoration-emerald-500/60' : 'text-slate-900'
+                }`}
+              >
+                {med.name}
+              </span>
+              {isOrdered && (
+                <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold uppercase tracking-wider">
+                  Ordered{formattedOrderDate ? ` · ${formattedOrderDate}` : ''}
+                </span>
+              )}
             </div>
             <div className="text-[11px] text-slate-500 font-mono">
               {med.genericName} &bull; {med.strength} ({med.dosageForm})
@@ -503,9 +687,15 @@ function renderTableRow(
 
       {/* Deficit to Order */}
       <td className="py-3 px-3 text-right">
-        <span className={`inline-block px-2.5 py-0.5 rounded-md font-mono font-bold text-xs ${
-          isOut ? 'bg-rose-600 text-white shadow-2xs' : 'bg-amber-100 text-amber-900'
-        }`}>
+        <span
+          className={`inline-block px-2.5 py-0.5 rounded-md font-mono font-bold text-xs ${
+            isOrdered
+              ? 'bg-emerald-100 text-emerald-800'
+              : isOut
+                ? 'bg-rose-600 text-white shadow-2xs'
+                : 'bg-amber-100 text-amber-900'
+          }`}
+        >
           +{med.deficit} packs
         </span>
       </td>
@@ -520,16 +710,46 @@ function renderTableRow(
         </div>
       </td>
 
-      {/* Actions */}
-      <td className="py-3 px-3 text-center">
-        <button
-          onClick={() => onOpenMedicineModal(med)}
-          className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs flex items-center justify-center gap-1 mx-auto transition"
-          title="Open modal to restock received quantity or update batch"
-        >
-          <Edit3 className="w-3.5 h-3.5" />
-          <span>Restock</span>
-        </button>
+      {/* Reorder Status Toggle & Restock Action */}
+      <td className="py-3 px-3">
+        <div className="flex items-center justify-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onToggleOrdered(med)}
+            className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 transition whitespace-nowrap ${
+              isOrdered
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300'
+            }`}
+            title={
+              isOrdered
+                ? 'Item marked as ordered from supplier. Click to revert to Needs Order.'
+                : 'Mark this item as Ordered from supplier'
+            }
+          >
+            {isOrdered ? (
+              <>
+                <CheckSquare className="w-3.5 h-3.5" />
+                <span>Ordered</span>
+              </>
+            ) : (
+              <>
+                <Square className="w-3.5 h-3.5 text-slate-400" />
+                <span>Mark as Ordered</span>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onOpenMedicineModal(med)}
+            className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs flex items-center justify-center gap-1 transition"
+            title="Open modal to restock received quantity or update batch"
+          >
+            <Edit3 className="w-3.5 h-3.5" />
+            <span>Restock</span>
+          </button>
+        </div>
       </td>
     </tr>
   );

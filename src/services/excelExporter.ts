@@ -239,6 +239,7 @@ export function exportCriticalStockToExcel(medicines: MedicineItem[], categoryFi
 
     return {
       'S.No': idx + 1,
+      'Reorder Status': m.reorderStatus === 'ordered' ? 'ORDERED' : 'NEEDS ORDER',
       'Category': m.category,
       'Product Name': m.name,
       'Generic Formula': m.genericName,
@@ -277,6 +278,7 @@ export function exportCriticalStockToCSV(medicines: MedicineItem[], categoryFilt
 
   const headers = [
     'S.No',
+    'Reorder Status',
     'Category',
     'Product Name',
     'Generic Formula',
@@ -298,6 +300,7 @@ export function exportCriticalStockToCSV(medicines: MedicineItem[], categoryFilt
 
     return [
       idx + 1,
+      `"${m.reorderStatus === 'ordered' ? 'ORDERED' : 'NEEDS ORDER'}"`,
       `"${(m.category || '').replace(/"/g, '""')}"`,
       `"${(m.name || '').replace(/"/g, '""')}"`,
       `"${(m.genericName || '').replace(/"/g, '""')}"`,

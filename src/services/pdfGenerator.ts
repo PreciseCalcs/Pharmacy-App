@@ -2,11 +2,13 @@ import jsPDF from 'jspdf';
 import { MedicineItem, SaleTransaction, ZAHID_PHARMACY_DETAILS } from '../types/pharmacy';
 import { formatDateTime } from '../utils/dates';
 import { formatPKR, getPieceRetailPrice } from '../utils/pharmacyHelpers';
+import { syncEngine } from './syncEngine';
 
 export function generateSalesReportPDF(
   transactions: SaleTransaction[],
   title: string = 'Pharmacy Sales & Revenue Report'
 ): void {
+  const details = syncEngine.getPharmacyDetails() || ZAHID_PHARMACY_DETAILS;
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -19,16 +21,21 @@ export function generateSalesReportPDF(
   // Header
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
-  doc.text(ZAHID_PHARMACY_DETAILS.name, pageWidth / 2, y, { align: 'center' });
+  doc.text(details.name, pageWidth / 2, y, { align: 'center' });
 
   y += 6;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  doc.text(`${ZAHID_PHARMACY_DETAILS.address}, ${ZAHID_PHARMACY_DETAILS.city}`, pageWidth / 2, y, { align: 'center' });
+  doc.text(`${details.address}, ${details.city}`, pageWidth / 2, y, { align: 'center' });
 
   y += 5;
   doc.setFontSize(9);
-  doc.text(`Drug Licence: ${ZAHID_PHARMACY_DETAILS.drugLicenceNumber} | Phone: ${ZAHID_PHARMACY_DETAILS.phone}`, pageWidth / 2, y, { align: 'center' });
+  doc.text(
+    `Drug Licence: ${details.drugLicenceNumber}${details.ntnNumber ? ` | NTN: ${details.ntnNumber}` : ''} | Phone: ${details.phone}`,
+    pageWidth / 2,
+    y,
+    { align: 'center' }
+  );
 
   y += 6;
   doc.setLineWidth(0.5);
@@ -46,7 +53,10 @@ export function generateSalesReportPDF(
   // Summary Metrics
   const totalRevenue = transactions.reduce((acc, t) => acc + t.totalAmount, 0);
   const totalProfit = transactions.reduce((acc, t) => acc + (t.totalProfit || 0), 0);
-  const totalItemsSold = transactions.reduce((acc, t) => acc + t.items.reduce((s, i) => s + i.quantity, 0), 0);
+  const totalItemsSold = transactions.reduce(
+    (acc, t) => acc + t.items.reduce((s, i) => s + i.quantity, 0),
+    0
+  );
 
   y += 8;
   doc.setFillColor(243, 244, 246);
@@ -63,54 +73,65 @@ export function generateSalesReportPDF(
 
   y += 22;
 
-  // Table header
-  doc.setFillColor(229, 231, 235);
-  doc.rect(14, y, pageWidth - 28, 7, 'F');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.text('Invoice #', 16, y + 5);
-  doc.text('Date & Time', 45, y + 5);
-  doc.text('Customer', 85, y + 5);
-  doc.text('Payment', 125, y + 5);
-  doc.text('Items', 150, y + 5);
-  doc.text('Amount (PKR)', pageWidth - 16, y + 5, { align: 'right' });
+  const drawSalesTableHeader = (yPos: number) => {
+    doc.setFillColor(229, 231, 235);
+    doc.rect(14, yPos, pageWidth - 28, 7, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('Invoice #', 16, yPos + 5);
+    doc.text('Date & Time', 45, yPos + 5);
+    doc.text('Customer', 85, yPos + 5);
+    doc.text('Payment', 125, yPos + 5);
+    doc.text('Items', 150, yPos + 5);
+    doc.text('Amount (PKR)', pageWidth - 16, yPos + 5, { align: 'right' });
+  };
 
+  drawSalesTableHeader(y);
   y += 10;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
 
-  transactions.slice(0, 35).forEach((txn) => {
-    if (y > 275) {
+  // Render all transactions across multiple A4 pages
+  transactions.forEach((txn) => {
+    if (y > 272) {
       doc.addPage();
       y = 18;
+      drawSalesTableHeader(y);
+      y += 10;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
     }
     doc.text(txn.invoiceNumber, 16, y);
     doc.text(formatDateTime(txn.createdAt), 45, y);
     doc.text((txn.customerName || 'Walk-in').slice(0, 20), 85, y);
     doc.text(txn.paymentMethod, 125, y);
     doc.text(String(txn.items.length), 153, y);
-    doc.text(`Rs. ${txn.totalAmount.toLocaleString('en-PK')}`, pageWidth - 16, y, { align: 'right' });
+    doc.text(`Rs. ${txn.totalAmount.toLocaleString('en-PK')}`, pageWidth - 16, y, {
+      align: 'right',
+    });
     y += 6;
   });
 
-  if (transactions.length > 35) {
-    doc.setFont('helvetica', 'italic');
-    doc.text(`... and ${transactions.length - 35} more transactions`, 16, y + 2);
+  // Add footer with page numbers on every page
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text(
+      `${details.name} | PocketBase Local Offline Architecture | Page ${p} of ${totalPages}`,
+      pageWidth / 2,
+      288,
+      { align: 'center' }
+    );
   }
 
-  // Footer
-  doc.setFontSize(7.5);
-  doc.text(
-    'Zahid Medical Store &bull; PocketBase Local Offline Architecture &bull; Official Computerized Record',
-    pageWidth / 2,
-    288,
-    { align: 'center' }
-  );
-
-  doc.save(`Zahid_Sales_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
+  const safeSlug = details.name.replace(/[^a-zA-Z0-9]+/g, '_');
+  doc.save(`${safeSlug}_Sales_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 export function generateInventoryAuditPDF(medicines: MedicineItem[]): void {
+  const details = syncEngine.getPharmacyDetails() || ZAHID_PHARMACY_DETAILS;
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -123,16 +144,21 @@ export function generateInventoryAuditPDF(medicines: MedicineItem[]): void {
   // Header
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
-  doc.text(ZAHID_PHARMACY_DETAILS.name, pageWidth / 2, y, { align: 'center' });
+  doc.text(details.name, pageWidth / 2, y, { align: 'center' });
 
   y += 6;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  doc.text(`${ZAHID_PHARMACY_DETAILS.address}, ${ZAHID_PHARMACY_DETAILS.city}`, pageWidth / 2, y, { align: 'center' });
+  doc.text(`${details.address}, ${details.city}`, pageWidth / 2, y, { align: 'center' });
 
   y += 5;
   doc.setFontSize(9);
-  doc.text(`Physical Inventory Valuation & Shelf Ledger &bull; Drug Licence: ${ZAHID_PHARMACY_DETAILS.drugLicenceNumber}`, pageWidth / 2, y, { align: 'center' });
+  doc.text(
+    `Physical Inventory Valuation & Shelf Ledger | Drug Licence: ${details.drugLicenceNumber}`,
+    pageWidth / 2,
+    y,
+    { align: 'center' }
+  );
 
   y += 6;
   doc.setLineWidth(0.5);
@@ -140,11 +166,17 @@ export function generateInventoryAuditPDF(medicines: MedicineItem[]): void {
 
   // Summary
   const totalValue = medicines.reduce(
-    (acc, m) => acc + (m.currentStockPacks * m.unitRetailPrice) + ((m.currentStockLoose || 0) * getPieceRetailPrice(m)),
+    (acc, m) =>
+      acc +
+      m.currentStockPacks * m.unitRetailPrice +
+      (m.currentStockLoose || 0) * getPieceRetailPrice(m),
     0
   );
   const totalCost = medicines.reduce(
-    (acc, m) => acc + (m.currentStockPacks * m.unitCostPrice) + ((m.currentStockLoose || 0) * (m.unitCostPrice / (m.unitsPerPack || 1))),
+    (acc, m) =>
+      acc +
+      m.currentStockPacks * m.unitCostPrice +
+      (m.currentStockLoose || 0) * (m.unitCostPrice / (m.unitsPerPack || 1)),
     0
   );
 
@@ -160,26 +192,32 @@ export function generateInventoryAuditPDF(medicines: MedicineItem[]): void {
 
   y += 18;
 
-  // Table header
-  doc.setFillColor(229, 231, 235);
-  doc.rect(14, y, pageWidth - 28, 7, 'F');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.text('Medicine & Formula', 16, y + 5);
-  doc.text('Shelf', 72, y + 5);
-  doc.text('Stock (P/L)', 96, y + 5);
-  doc.text('Pack MRP', 125, y + 5);
-  doc.text('Batch', 150, y + 5);
-  doc.text('Expiry', pageWidth - 16, y + 5, { align: 'right' });
+  const drawInventoryTableHeader = (yPos: number) => {
+    doc.setFillColor(229, 231, 235);
+    doc.rect(14, yPos, pageWidth - 28, 7, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text('Medicine & Formula', 16, yPos + 5);
+    doc.text('Shelf', 72, yPos + 5);
+    doc.text('Stock (P/L)', 96, yPos + 5);
+    doc.text('Pack MRP', 125, yPos + 5);
+    doc.text('Batch', 150, yPos + 5);
+    doc.text('Expiry', pageWidth - 16, yPos + 5, { align: 'right' });
+  };
 
+  drawInventoryTableHeader(y);
   y += 10;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
 
   medicines.forEach((m) => {
-    if (y > 275) {
+    if (y > 272) {
       doc.addPage();
       y = 18;
+      drawInventoryTableHeader(y);
+      y += 10;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
     }
     const nameLine = `${m.name} (${m.strength})`;
     doc.text(nameLine.slice(0, 32), 16, y);
@@ -191,5 +229,19 @@ export function generateInventoryAuditPDF(medicines: MedicineItem[]): void {
     y += 5.5;
   });
 
-  doc.save(`Zahid_Inventory_Valuation_${new Date().toISOString().slice(0, 10)}.pdf`);
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text(
+      `${details.name} | Inventory Valuation Ledger | Page ${p} of ${totalPages}`,
+      pageWidth / 2,
+      288,
+      { align: 'center' }
+    );
+  }
+
+  const safeSlug = details.name.replace(/[^a-zA-Z0-9]+/g, '_');
+  doc.save(`${safeSlug}_Inventory_Valuation_${new Date().toISOString().slice(0, 10)}.pdf`);
 }

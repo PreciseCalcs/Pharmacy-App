@@ -1,21 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { X, Printer, Download, Share2, CheckCircle2, MessageSquare } from 'lucide-react';
+import { X, Printer, CheckCircle2, MessageSquare } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { PrintFormat, SaleTransaction, ZAHID_PHARMACY_DETAILS } from '../types/pharmacy';
+import {
+  PharmacyDetails,
+  PrintFormat,
+  SaleTransaction,
+  ZAHID_PHARMACY_DETAILS,
+} from '../types/pharmacy';
 import { generateReceiptHtml } from '../utils/receiptTemplate';
 import { formatDateTime } from '../utils/dates';
-import { formatPKR } from '../utils/pharmacyHelpers';
+import { syncEngine } from '../services/syncEngine';
 
 interface InvoiceModalProps {
   isOpen: boolean;
   onClose: () => void;
   transaction: SaleTransaction | null;
+  pharmacyDetails?: PharmacyDetails;
 }
 
 export const InvoiceModal: React.FC<InvoiceModalProps> = ({
   isOpen,
   onClose,
   transaction,
+  pharmacyDetails,
 }) => {
   const [printFormat, setPrintFormat] = useState<PrintFormat>('thermal-80');
 
@@ -33,17 +40,27 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
 
   if (!isOpen || !transaction) return null;
 
+  const details =
+    pharmacyDetails || syncEngine.getPharmacyDetails() || ZAHID_PHARMACY_DETAILS;
+
   const handlePrint = () => {
     window.print();
   };
 
   const handleWhatsAppShare = () => {
-    const phone = transaction.customerPhone ? transaction.customerPhone.replace(/[^0-9]/g, '') : '';
+    const phone = transaction.customerPhone
+      ? transaction.customerPhone.replace(/[^0-9]/g, '')
+      : '';
     const cleanPhone = phone.startsWith('0') ? `92${phone.slice(1)}` : phone;
 
-    let text = `*${ZAHID_PHARMACY_DETAILS.name}*\n`;
-    text += `Ghazipur Jalalpur Pirwala, Multan\n`;
-    text += `Licence: ${ZAHID_PHARMACY_DETAILS.drugLicenceNumber}\n`;
+    let text = `*${details.name}*\n`;
+    text += `${details.address}, ${details.city}\n`;
+    text += `Licence: ${details.drugLicenceNumber}${
+      details.ntnNumber ? ` | NTN: ${details.ntnNumber}` : ''
+    }\n`;
+    if (details.phone) {
+      text += `Phone: ${details.phone}\n`;
+    }
     text += `--------------------------------\n`;
     text += `Invoice: ${transaction.invoiceNumber}\n`;
     text += `Date: ${formatDateTime(transaction.createdAt)}\n`;
@@ -60,14 +77,23 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
     text += `*Net Total: Rs. ${transaction.totalAmount}*\n`;
     text += `Payment: ${transaction.paymentMethod}\n`;
     text += `--------------------------------\n`;
-    text += `Thank you for visiting ${ZAHID_PHARMACY_DETAILS.name}!`;
+    text += `Thank you for visiting ${details.name}!`;
 
     const encoded = encodeURIComponent(text);
-    const url = cleanPhone ? `https://wa.me/${cleanPhone}?text=${encoded}` : `https://wa.me/?text=${encoded}`;
-    window.open(url, '_blank');
+    const url = cleanPhone
+      ? `https://wa.me/${cleanPhone}?text=${encoded}`
+      : `https://wa.me/?text=${encoded}`;
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
-  const receiptHtml = generateReceiptHtml(transaction, printFormat);
+  const receiptHtml = generateReceiptHtml(transaction, printFormat, details);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
@@ -80,7 +106,9 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
               <h3 className="font-bold text-slate-900 text-sm sm:text-base">
                 Sale Dispensed & Invoiced
               </h3>
-              <p className="text-xs text-slate-500 font-mono">Invoice #{transaction.invoiceNumber}</p>
+              <p className="text-xs text-slate-500 font-mono">
+                Invoice #{transaction.invoiceNumber}
+              </p>
             </div>
           </div>
           <button

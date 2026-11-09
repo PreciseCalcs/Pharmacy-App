@@ -126,7 +126,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     });
   }, [criticalStockList, stockAlertFilter]);
 
-  // 7-Day sales revenue trend calculation for performance tracking
+  // 7-Day sales revenue trend calculation using 100% real sales data
   const last7DaysData = useMemo(() => {
     const days: {
       dateKey: string;
@@ -136,46 +136,45 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       orders: number;
     }[] = [];
 
-    // Fallback baseline daily revenues for realistic visualization
-    const baselineDailyRevenue = [14200, 18500, 16800, 22400, 19100, 24600, 0];
+    const toLocalDateKey = (dateObj: Date) => {
+      const y = dateObj.getFullYear();
+      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const d = String(dateObj.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
 
     const now = new Date();
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = toLocalDateKey(d);
       const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
       const dayMonth = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
 
-      // Find real sales matching this day
+      // Find real sales matching this local calendar day
       const daySales = sales.filter((s) => {
         try {
-          const saleDate = new Date(s.createdAt).toISOString().split('T')[0];
-          return saleDate === dateStr;
+          const parsed = new Date(s.createdAt);
+          if (isNaN(parsed.getTime())) return false;
+          return toLocalDateKey(parsed) === dateStr;
         } catch {
           return false;
         }
       });
 
       const realRevenue = daySales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
-      const orders = daySales.length;
-
-      // If today (i === 0), use real todayRevenue or fallback if 0
-      const baseline = baselineDailyRevenue[6 - i] || 16000;
-      const finalRevenue = realRevenue > 0 ? realRevenue : (i === 0 && todayRevenue > 0 ? todayRevenue : baseline);
-      const finalOrders = orders > 0 ? orders : Math.max(1, Math.round(finalRevenue / 900));
 
       days.push({
         dateKey: dateStr,
         label: i === 0 ? 'Today' : dayName,
         fullDate: dayMonth,
-        revenue: finalRevenue,
-        orders: finalOrders,
+        revenue: realRevenue,
+        orders: daySales.length,
       });
     }
 
     return days;
-  }, [sales, todayRevenue]);
+  }, [sales]);
 
   const total7DayRevenue = useMemo(() => {
     return last7DaysData.reduce((acc, d) => acc + d.revenue, 0);
@@ -187,7 +186,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return last7DaysData.reduce((max, d) => (d.revenue > max.revenue ? d : max), last7DaysData[0]);
   }, [last7DaysData]);
 
-  // Most dispensed calculation
+  // Most dispensed calculation (100% real recorded sales)
   const medicineDispenseCounts: Record<string, { name: string; quantity: number }> = {};
   sales.forEach((s) => {
     s.items.forEach((item) => {
@@ -200,14 +199,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const mostDispensedList = Object.values(medicineDispenseCounts)
     .sort((a, b) => b.quantity - a.quantity)
-    .slice(0, 3);
-
-  // Fallback defaults if no sales yet to show populated state
-  const displayMostDispensed = mostDispensedList.length > 0 ? mostDispensedList : [
-    { name: 'Risek 20mg', quantity: 4 },
-    { name: 'Augmentin 625mg', quantity: 2 },
-    { name: 'Panadol 500mg', quantity: 1 },
-  ];
+    .slice(0, 5);
 
   const recentTransactions = sales.slice(0, 5);
 
@@ -255,10 +247,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div>
             <span className="text-xs font-semibold text-slate-500">Today's sales</span>
             <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono tracking-tight mt-1">
-              Rs {todayRevenue > 0 ? todayRevenue.toLocaleString() : '940'}
+              Rs {todayRevenue.toLocaleString()}
             </div>
             <span className="text-[11px] text-slate-400 mt-0.5 block">
-              {todaySales.length > 0 ? `${todaySales.length} recorded sales` : '1 recorded sales'}
+              {todaySales.length} {todaySales.length === 1 ? 'recorded sale' : 'recorded sales'}
             </span>
           </div>
 
@@ -272,10 +264,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div>
             <span className="text-xs font-semibold text-slate-500">Customer balance due</span>
             <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono tracking-tight mt-1">
-              Rs {totalKhataBalance > 0 ? totalKhataBalance.toLocaleString() : '1,730'}
+              Rs {totalKhataBalance.toLocaleString()}
             </div>
             <span className="text-[11px] text-slate-400 mt-0.5 block">
-              {khataAccountsWithBalance > 0 ? `${khataAccountsWithBalance} accounts with a balance` : '1 accounts with a balance'}
+              {khataAccountsWithBalance} {khataAccountsWithBalance === 1 ? 'account' : 'accounts'} with a balance
             </span>
           </div>
 
@@ -385,7 +377,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 tickLine={false}
                 axisLine={false}
                 tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'monospace' }}
-                tickFormatter={(value) => `Rs ${Math.round(value / 1000)}k`}
+                tickFormatter={(value) =>
+                  value >= 1000
+                    ? `Rs ${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}k`
+                    : `Rs ${value}`
+                }
                 dx={-4}
               />
               <Tooltip
@@ -453,43 +449,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-100 font-sans text-xs">
               {recentTransactions.length === 0 ? (
-                <>
-                  <tr className="hover:bg-slate-50/50">
-                    <td className="py-3 px-3 font-mono font-bold text-slate-900">DEMO-1042</td>
-                    <td className="py-3 px-3 text-slate-800">Nadeem Ahmed</td>
-                    <td className="py-3 px-3 text-slate-600">Main Counter</td>
-                    <td className="py-3 px-3">
-                      <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium text-[10px]">
-                        Credit
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 text-right font-mono font-bold text-slate-900">
-                      Rs 940
-                    </td>
-                  </tr>
-                  <tr className="hover:bg-slate-50/50">
-                    <td className="py-3 px-3 font-mono font-bold text-slate-900">DEMO-1041</td>
-                    <td className="py-3 px-3 text-slate-800">Yasmeen Bibi</td>
-                    <td className="py-3 px-3 text-slate-600">Counter 02</td>
-                    <td className="py-3 px-3 text-slate-600">Cash</td>
-                    <td className="py-3 px-3 text-right font-mono font-bold text-slate-900">
-                      Rs 640
-                    </td>
-                  </tr>
-                  <tr className="hover:bg-slate-50/50">
-                    <td className="py-3 px-3 font-mono font-bold text-slate-900">DEMO-1035</td>
-                    <td className="py-3 px-3 text-slate-800">Nadeem Ahmed</td>
-                    <td className="py-3 px-3 text-slate-600">Main Counter</td>
-                    <td className="py-3 px-3">
-                      <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium text-[10px]">
-                        Credit
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 text-right font-mono font-bold text-slate-900">
-                      Rs 1,440
-                    </td>
-                  </tr>
-                </>
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-slate-400 text-xs">
+                    No sales recorded yet. Complete a transaction at the Point of Sale to see receipts here.
+                  </td>
+                </tr>
               ) : (
                 recentTransactions.map((txn) => (
                   <tr key={txn.id} className="hover:bg-slate-50/50">
@@ -731,28 +695,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* SECTION: Most Dispensed (Screenshot 1) */}
+      {/* SECTION: Most Dispensed */}
       <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-3">
         <div>
           <h2 className="text-base font-bold text-slate-900">Most dispensed</h2>
-          <p className="text-xs text-slate-500">Based on recorded preview sales.</p>
+          <p className="text-xs text-slate-500">Based on recorded counter sales.</p>
         </div>
 
-        <div className="divide-y divide-slate-100 text-xs">
-          {displayMostDispensed.map((item, idx) => (
-            <div key={idx} className="py-2.5 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="font-mono text-slate-400 font-semibold text-[11px]">
-                  0{idx + 1}
+        {mostDispensedList.length === 0 ? (
+          <div className="py-6 text-center text-slate-400 text-xs">
+            No items dispensed yet. Top-selling items will appear here as sales are recorded.
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100 text-xs">
+            {mostDispensedList.map((item, idx) => (
+              <div key={idx} className="py-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-slate-400 font-semibold text-[11px]">
+                    0{idx + 1}
+                  </span>
+                  <span className="font-bold text-slate-900">{item.name}</span>
+                </div>
+                <span className="text-slate-500 font-sans">
+                  {item.quantity} sold
                 </span>
-                <span className="font-bold text-slate-900">{item.name}</span>
               </div>
-              <span className="text-slate-500 font-sans">
-                {item.quantity} sold
-              </span>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

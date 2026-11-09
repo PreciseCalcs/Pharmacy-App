@@ -457,15 +457,30 @@ export class PharmacySyncEngine {
     const idx = this.medicines.findIndex((m) => m.id === id);
     if (idx === -1) throw new Error('Medicine not found in catalog');
 
-    const updated: MedicineItem = {
-      ...this.medicines[idx],
+    const current = this.medicines[idx];
+    const nextPacks = updates.currentStockPacks ?? current.currentStockPacks;
+    const nextThreshold = updates.minThresholdPacks ?? current.minThresholdPacks ?? 5;
+
+    // Automatically clear 'ordered' status once stock is replenished above threshold
+    const autoResetReorder =
+      updates.reorderStatus === undefined &&
+      nextPacks > nextThreshold &&
+      current.reorderStatus === 'ordered';
+
+    const finalUpdates: Partial<MedicineItem> = {
       ...updates,
+      ...(autoResetReorder ? { reorderStatus: 'needed', orderedAt: undefined } : {}),
+    };
+
+    const updated: MedicineItem = {
+      ...current,
+      ...finalUpdates,
       updated: new Date().toISOString(),
     };
 
     this.medicines[idx] = updated;
     this.saveMedicines();
-    this.enqueueOutbox('UPDATE_MEDICINE', { id, updates });
+    this.enqueueOutbox('UPDATE_MEDICINE', { id, updates: finalUpdates });
     this.notify();
 
     try {

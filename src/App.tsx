@@ -884,6 +884,7 @@ export default function App() {
           {activeTab === 'critical_stock' && (
             <CriticalStockView
               medicines={medicines}
+              onUpdateMedicine={syncEngine.updateMedicine.bind(syncEngine)}
               onOpenMedicineModal={(med) => {
                 setSelectedMedicineForEdit(med || null);
                 setIsMedicineModalOpen(true);
@@ -955,6 +956,7 @@ export default function App() {
         isOpen={isInvoiceModalOpen}
         onClose={() => setIsInvoiceModalOpen(false)}
         transaction={selectedInvoice}
+        pharmacyDetails={pharmacyDetails}
       />
 
       <BarcodeScannerModal
