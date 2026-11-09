@@ -25,6 +25,9 @@ import {
   Flame,
   Check,
   X,
+  RotateCcw,
+  ScanLine,
+  Printer,
 } from 'lucide-react';
 import {
   MedicineItem,
@@ -42,9 +45,18 @@ import {
   getUnitsPerPack,
   isExpired,
 } from '../utils/pharmacyHelpers';
-import { parseScannedCode } from '../utils/codeParser';
+import { findSaleByReceiptCode, parseScannedCode } from '../utils/codeParser';
+import { formatDateTime } from '../utils/dates';
+import { generateInvoiceBarcodeSvg } from '../utils/receiptTemplate';
 import { soundService } from '../services/soundAlerts';
 import { syncEngine } from '../services/syncEngine';
+
+const POS_RETURN_REASONS = [
+  'Customer return / Changed mind',
+  'Doctor changed prescription',
+  'Wrong strength or item dispensed',
+  'Damaged packaging / Near expiry exchange',
+];
 
 interface PosViewProps {
   medicines: MedicineItem[];
@@ -66,6 +78,8 @@ interface PosViewProps {
   onSaleCompleted: (txn: SaleTransaction) => void;
   externalScannedItem?: { medicine: MedicineItem; scanId: number } | null;
   onExternalScanConsumed?: () => void;
+  externalScannedReceipt?: { transaction: SaleTransaction; scanId: number } | null;
+  onExternalReceiptScanConsumed?: () => void;
   onUnrecognizedBarcode?: (code: string) => void;
 }
 
@@ -77,6 +91,8 @@ export const PosView: React.FC<PosViewProps> = ({
   onSaleCompleted,
   externalScannedItem,
   onExternalScanConsumed,
+  externalScannedReceipt,
+  onExternalReceiptScanConsumed,
   onUnrecognizedBarcode,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -100,13 +116,27 @@ export const PosView: React.FC<PosViewProps> = ({
   const [customShortUrgent, setCustomShortUrgent] = useState(false);
   const [shortBookList, setShortBookList] = useState(() => syncEngine.getShortBook());
 
+  // Counter Receipt Return / Refund by Barcode or Invoice # state
+  const [salesList, setSalesList] = useState<SaleTransaction[]>(() => syncEngine.getSales());
+  const [showReceiptReturnDrawer, setShowReceiptReturnDrawer] = useState(false);
+  const [receiptLookupInput, setReceiptLookupInput] = useState('');
+  const [matchedReceiptForReturn, setMatchedReceiptForReturn] =
+    useState<SaleTransaction | null>(null);
+  const [returnLookupError, setReturnLookupError] = useState<string | null>(null);
+  const [returnReason, setReturnReason] = useState<string>(POS_RETURN_REASONS[0]);
+  const [returnCustomNote, setReturnCustomNote] = useState<string>('');
+  const [isProcessingReturn, setIsProcessingReturn] = useState(false);
+  const [returnSuccessBanner, setReturnSuccessBanner] = useState<string | null>(null);
+
   const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const receiptScanInputRef = useRef<HTMLInputElement>(null);
   const activeCounter = syncEngine.getActiveCounter();
   const khataCustomers = syncEngine.getKhataCustomers();
 
   useEffect(() => {
     const unsub = syncEngine.subscribe(() => {
       setShortBookList(syncEngine.getShortBook());
+      setSalesList(syncEngine.getSales());
     });
     return unsub;
   }, []);
@@ -269,12 +299,93 @@ export const PosView: React.FC<PosViewProps> = ({
     }
   }, [externalScannedItem, addToCart, onExternalScanConsumed]);
 
+  // Consume external receipt barcode scans (from Camera Scanner or global Hardware Gun)
+  useEffect(() => {
+    if (externalScannedReceipt) {
+      setShowReceiptReturnDrawer(true);
+      setShowShortBookDrawer(false);
+      setMatchedReceiptForReturn(externalScannedReceipt.transaction);
+      setReceiptLookupInput(externalScannedReceipt.transaction.invoiceNumber);
+      setReturnLookupError(null);
+      onExternalReceiptScanConsumed?.();
+    }
+  }, [externalScannedReceipt, onExternalReceiptScanConsumed]);
+
+  const handleLookupReceipt = (rawQuery?: string) => {
+    const query = (rawQuery ?? receiptLookupInput).trim();
+    setReturnLookupError(null);
+    if (!query) {
+      setReturnLookupError('Please scan the receipt barcode or enter the Invoice #.');
+      return;
+    }
+
+    const latestSales = syncEngine.getSales();
+    setSalesList(latestSales);
+    const found = findSaleByReceiptCode(query, latestSales);
+    if (found) {
+      soundService.scanSuccess();
+      setMatchedReceiptForReturn(found);
+      setReceiptLookupInput(found.invoiceNumber);
+      setReturnLookupError(null);
+    } else {
+      soundService.errorTone();
+      setMatchedReceiptForReturn(null);
+      setReturnLookupError(
+        `No sale receipt found matching "${query}". Check the Invoice # (e.g. ZMS-2026... or last 4 digits).`
+      );
+    }
+  };
+
+  const handleProcessCounterReturn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!matchedReceiptForReturn || matchedReceiptForReturn.status === 'refunded') return;
+    setIsProcessingReturn(true);
+    setReturnLookupError(null);
+
+    try {
+      const finalReason = returnCustomNote.trim()
+        ? `${returnReason} - ${returnCustomNote.trim()}`
+        : returnReason;
+      const updated = await syncEngine.refundSale(
+        matchedReceiptForReturn.id,
+        currentUser.name,
+        finalReason
+      );
+      soundService.cashRegister();
+      setMatchedReceiptForReturn(updated);
+      setReturnCustomNote('');
+      setReturnSuccessBanner(
+        `Processed Return for Invoice #${updated.invoiceNumber} (${formatPKR(
+          updated.totalAmount
+        )}) — Stock restored to shelf!`
+      );
+      setTimeout(() => setReturnSuccessBanner(null), 6000);
+    } catch (err: any) {
+      soundService.errorTone();
+      setReturnLookupError(err?.message || 'Failed to process receipt return.');
+    } finally {
+      setIsProcessingReturn(false);
+    }
+  };
+
   // Handle Enter key inside the POS search box (for barcode guns or fast Enter dispensing)
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && searchQuery.trim()) {
       e.preventDefault();
       const raw = searchQuery.trim();
-      const parsed = parseScannedCode(raw, medicines);
+      const parsed = parseScannedCode(raw, medicines, salesList);
+
+      // 1. If the cashier scanned a Receipt Barcode or typed an Invoice # in POS search
+      if (parsed.matchedSale) {
+        soundService.scanSuccess();
+        setSearchQuery('');
+        setShowReceiptReturnDrawer(true);
+        setShowShortBookDrawer(false);
+        setMatchedReceiptForReturn(parsed.matchedSale);
+        setReceiptLookupInput(parsed.matchedSale.invoiceNumber);
+        setReturnLookupError(null);
+        return;
+      }
 
       if (parsed.matchedMedicine) {
         addToCart(parsed.matchedMedicine, 'pack');
@@ -542,7 +653,31 @@ export const PosView: React.FC<PosViewProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  setShowShortBookDrawer(!showShortBookDrawer);
+                  const next = !showReceiptReturnDrawer;
+                  setShowReceiptReturnDrawer(next);
+                  if (next) {
+                    setShowShortBookDrawer(false);
+                    setTimeout(() => receiptScanInputRef.current?.focus(), 60);
+                  }
+                  soundService.click();
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition cursor-pointer ${
+                  showReceiptReturnDrawer
+                    ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                    : 'bg-rose-50 hover:bg-rose-100 text-rose-900 border-rose-200'
+                }`}
+                title="Scan customer receipt barcode or enter Invoice # to process a sale return / refund"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Return / Scan Receipt</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !showShortBookDrawer;
+                  setShowShortBookDrawer(next);
+                  if (next) setShowReceiptReturnDrawer(false);
                   soundService.click();
                 }}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition cursor-pointer ${
@@ -574,13 +709,307 @@ export const PosView: React.FC<PosViewProps> = ({
                 type="button"
                 onClick={onOpenScanner}
                 className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition"
-                title="Camera Barcode Scanner (F4)"
+                title="Camera Barcode Scanner (F4) — Scans Medicine or Receipt Barcodes"
               >
                 <Camera className="w-3.5 h-3.5 text-emerald-600" />
                 <span>Scanner</span>
               </button>
             </div>
           </div>
+
+          {/* Return Success Confirmation Banner */}
+          {returnSuccessBanner && (
+            <div className="mb-3 p-3 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-950 text-xs font-bold flex items-center justify-between gap-2 shadow-2xs">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                <span>{returnSuccessBanner}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReturnSuccessBanner(null)}
+                className="text-emerald-700 hover:text-emerald-950 p-0.5"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Collapsible Counter Receipt Return & Refund Drawer (By Receipt Barcode or Invoice #) */}
+          {showReceiptReturnDrawer && (
+            <div className="mb-4 p-4 rounded-2xl bg-rose-50/70 border border-rose-200 space-y-3.5 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <ScanLine className="w-4 h-4 text-rose-700" />
+                  <div>
+                    <span className="font-extrabold text-slate-900 block">
+                      Counter Receipt Return &amp; Refund (Scan Barcode or Enter Invoice #)
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      Cashiers &amp; Pharmacists can scan the printed receipt barcode or enter the
+                      Invoice # to restore stock and issue a refund
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowReceiptReturnDrawer(false)}
+                  className="text-slate-400 hover:text-slate-700 p-1"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Search / Barcode Scan Form */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <div className="relative flex-1">
+                  <ScanLine className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-rose-600" />
+                  <input
+                    ref={receiptScanInputRef}
+                    type="text"
+                    value={receiptLookupInput}
+                    onChange={(e) => setReceiptLookupInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleLookupReceipt();
+                      }
+                    }}
+                    placeholder="Scan Receipt Barcode or enter Invoice # (e.g. ZMS-20261109-1042 or last 4 digits)..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-rose-300 bg-white text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleLookupReceipt()}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer"
+                >
+                  <Search className="w-3.5 h-3.5" />
+                  <span>Find Receipt</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenScanner}
+                  className="px-3 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  title="Use Camera to scan the 1D Barcode on the printed receipt"
+                >
+                  <Camera className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Scan Camera</span>
+                </button>
+              </div>
+
+              {/* Quick Recent Receipts Strip (For 1-click testing or recent walk-in returns) */}
+              {salesList.length > 0 && (
+                <div className="flex items-center gap-1.5 overflow-x-auto pt-0.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-rose-800 shrink-0">
+                    Recent Counter Receipts:
+                  </span>
+                  {salesList.slice(0, 6).map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        setReceiptLookupInput(s.invoiceNumber);
+                        handleLookupReceipt(s.invoiceNumber);
+                      }}
+                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-mono font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer ${
+                        matchedReceiptForReturn?.id === s.id
+                          ? 'bg-rose-600 text-white border-rose-600'
+                          : s.status === 'refunded'
+                          ? 'bg-slate-100 text-slate-400 border-slate-200 line-through'
+                          : 'bg-white border-rose-200 hover:border-rose-400 text-slate-800'
+                      }`}
+                    >
+                      <span>{s.invoiceNumber}</span>
+                      <span
+                        className={`px-1.5 py-0.2 rounded text-[10px] ${
+                          matchedReceiptForReturn?.id === s.id
+                            ? 'bg-rose-800 text-white'
+                            : 'bg-rose-100 text-rose-900'
+                        }`}
+                      >
+                        {formatPKR(s.totalAmount)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {returnLookupError && (
+                <div className="p-2.5 rounded-xl bg-rose-100 border border-rose-300 text-rose-900 font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-700 shrink-0" />
+                  <span>{returnLookupError}</span>
+                </div>
+              )}
+
+              {/* Matched Receipt Details & Return Processor */}
+              {matchedReceiptForReturn && (
+                <div className="p-4 rounded-2xl bg-white border border-rose-200 shadow-2xs space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-black text-sm text-slate-900">
+                          Invoice #{matchedReceiptForReturn.invoiceNumber}
+                        </span>
+                        {matchedReceiptForReturn.status === 'refunded' ? (
+                          <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px] font-extrabold uppercase">
+                            Already Refunded
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold uppercase">
+                            Eligible for Return
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {formatDateTime(matchedReceiptForReturn.createdAt)} · Customer:{' '}
+                        <strong className="text-slate-700">
+                          {matchedReceiptForReturn.customerName}
+                        </strong>{' '}
+                        · Paid via{' '}
+                        <strong className="text-slate-700">
+                          {matchedReceiptForReturn.paymentMethod}
+                        </strong>
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onSaleCompleted(matchedReceiptForReturn)}
+                        className="px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-[11px] flex items-center gap-1"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        <span>View / Print Receipt</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Dispensed Items in this Receipt */}
+                  <div className="space-y-1.5">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                      Dispensed Items on Receipt (Will be restored to stock):
+                    </span>
+                    <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
+                      {matchedReceiptForReturn.items.map((item, idx) => (
+                        <div
+                          key={`${item.medicineId}-${idx}`}
+                          className="px-3 py-2 bg-slate-50/60 flex items-center justify-between text-xs"
+                        >
+                          <div>
+                            <span className="font-bold text-slate-900">
+                              {idx + 1}. {item.medicineName}
+                            </span>
+                            <span className="text-slate-500 ml-2">
+                              ({item.quantity} {item.unitType === 'pack' ? 'pack' : 'loose'} ×{' '}
+                              {formatPKR(item.pricePerUnit)})
+                            </span>
+                          </div>
+                          <span className="font-mono font-bold text-slate-900">
+                            {formatPKR(item.subtotal)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Barcode Preview & Total Summary */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                    <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-200 text-center">
+                      <div
+                        dangerouslySetInnerHTML={{
+                          __html: generateInvoiceBarcodeSvg(
+                            matchedReceiptForReturn.invoiceNumber,
+                            26
+                          ),
+                        }}
+                      />
+                      <span className="text-[10px] font-mono font-bold text-slate-600 block mt-0.5">
+                        *{matchedReceiptForReturn.invoiceNumber}*
+                      </span>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="text-[11px] text-slate-500 block">
+                        {matchedReceiptForReturn.paymentMethod === 'Credit'
+                          ? 'Khata Balance Reduction:'
+                          : `Refund Amount (${matchedReceiptForReturn.paymentMethod}):`}
+                      </span>
+                      <span className="text-lg font-black font-mono text-rose-700">
+                        {formatPKR(matchedReceiptForReturn.totalAmount)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {matchedReceiptForReturn.status === 'refunded' ? (
+                    <div className="p-3 rounded-xl bg-slate-100 border border-slate-200 text-slate-600 text-[11px] font-semibold">
+                      This receipt was already refunded by{' '}
+                      <strong>{matchedReceiptForReturn.refundedBy || 'Staff'}</strong>
+                      {matchedReceiptForReturn.refundReason
+                        ? ` (${matchedReceiptForReturn.refundReason})`
+                        : ''}
+                      .
+                    </div>
+                  ) : (
+                    <form
+                      onSubmit={handleProcessCounterReturn}
+                      className="pt-2 border-t border-slate-100 space-y-2.5"
+                    >
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
+                            Return Reason
+                          </label>
+                          <select
+                            value={returnReason}
+                            onChange={(e) => setReturnReason(e.target.value)}
+                            className="w-full px-2.5 py-2 rounded-xl border border-slate-300 bg-white font-semibold text-slate-900"
+                          >
+                            {POS_RETURN_REASONS.map((r) => (
+                              <option key={r} value={r}>
+                                {r}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
+                            Additional Note (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            value={returnCustomNote}
+                            onChange={(e) => setReturnCustomNote(e.target.value)}
+                            placeholder="e.g., Intact strips verified at counter..."
+                            className="w-full px-2.5 py-2 rounded-xl border border-slate-300 bg-white text-slate-900"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <span className="text-[11px] text-slate-500">
+                          Processed by: <strong>{currentUser.name}</strong> ({currentUser.role})
+                        </span>
+                        <button
+                          type="submit"
+                          disabled={isProcessingReturn}
+                          className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>
+                            {isProcessingReturn
+                              ? 'Restoring Stock...'
+                              : `Process Return & Refund ${formatPKR(
+                                  matchedReceiptForReturn.totalAmount
+                                )}`}
+                          </span>
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Short Book Confirmation Toast Banner */}
           {shortBookBanner && (

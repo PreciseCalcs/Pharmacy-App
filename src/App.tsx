@@ -107,6 +107,10 @@ export default function App() {
     medicine: MedicineItem;
     scanId: number;
   } | null>(null);
+  const [externalScannedReceipt, setExternalScannedReceipt] = useState<{
+    transaction: SaleTransaction;
+    scanId: number;
+  } | null>(null);
 
   // PocketBase Connection
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
@@ -187,8 +191,19 @@ export default function App() {
       if (now - lastScanTimeRef.current < 600) return;
       lastScanTimeRef.current = now;
 
-      const parsed = parseScannedCode(rawCode, medicines);
-      if (parsed.matchedMedicine) {
+      const parsed = parseScannedCode(rawCode, medicines, sales);
+      if (parsed.matchedSale) {
+        soundService.scanSuccess();
+        showToast(
+          `Receipt Scanned: Invoice #${parsed.matchedSale.invoiceNumber} loaded for Return/Refund`,
+          'success'
+        );
+        setExternalScannedReceipt({
+          transaction: parsed.matchedSale,
+          scanId: now,
+        });
+        setActiveTab('pos');
+      } else if (parsed.matchedMedicine) {
         soundService.scanSuccess();
         showToast(
           `Added to POS: ${parsed.matchedMedicine.name} (${parsed.matchedMedicine.strength})`,
@@ -205,7 +220,7 @@ export default function App() {
         setIsLinkCodeModalOpen(true);
       }
     },
-    [medicines, showToast]
+    [medicines, sales, showToast]
   );
 
   // Global Keyboard Shortcuts & Hardware Scanner Listener
@@ -975,6 +990,8 @@ export default function App() {
               }}
               externalScannedItem={externalScannedItem}
               onExternalScanConsumed={() => setExternalScannedItem(null)}
+              externalScannedReceipt={externalScannedReceipt}
+              onExternalReceiptScanConsumed={() => setExternalScannedReceipt(null)}
               onUnrecognizedBarcode={(code) => {
                 soundService.scanWarning();
                 setUnrecognizedCode(code);
@@ -1116,6 +1133,12 @@ export default function App() {
         onClose={() => setIsInvoiceModalOpen(false)}
         transaction={selectedInvoice}
         pharmacyDetails={pharmacyDetails}
+        currentStaffName={currentUser.name}
+        onTransactionUpdated={(updated) => {
+          setSelectedInvoice(updated);
+          setSales(syncEngine.getSales());
+          setMedicines(syncEngine.getMedicines());
+        }}
       />
 
       <BarcodeScannerModal

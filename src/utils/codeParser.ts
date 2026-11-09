@@ -1,4 +1,4 @@
-import { MedicineItem } from '../types/pharmacy';
+import { MedicineItem, SaleTransaction } from '../types/pharmacy';
 
 export interface ParsedCodeResult {
   raw: string;
@@ -7,21 +7,90 @@ export interface ParsedCodeResult {
   expiryDate?: string; // YYYY-MM-DD
   serialNumber?: string;
   matchedMedicine?: MedicineItem;
+  matchedSale?: SaleTransaction;
 }
 
 /**
- * Parses raw 1D, 2D QR, or GS1 DataMatrix code scanned by camera or hardware barcode gun
+ * Normalizes a scanned receipt barcode or typed invoice number by stripping surrounding asterisks
+ * or prefixes like 'ZMS-INV:' or '#'
+ */
+export function normalizeInvoiceCode(raw: string): string {
+  return (raw || '')
+    .trim()
+    .replace(/^\*+|\*+$/g, '')
+    .replace(/^zms-inv:/i, '')
+    .replace(/^invoice\s*#?\s*:?\s*/i, '')
+    .replace(/^#/, '')
+    .trim();
+}
+
+/**
+ * Finds a matching SaleTransaction from a scanned receipt barcode or typed invoice number
+ */
+export function findSaleByReceiptCode(
+  rawCode: string,
+  sales: SaleTransaction[]
+): SaleTransaction | undefined {
+  if (!rawCode || !Array.isArray(sales) || sales.length === 0) return undefined;
+  const cleaned = normalizeInvoiceCode(rawCode).toLowerCase();
+  if (!cleaned) return undefined;
+
+  // 1. Exact match on invoiceNumber or transaction id
+  const exact = sales.find(
+    (s) =>
+      s.invoiceNumber.trim().toLowerCase() === cleaned ||
+      s.id.trim().toLowerCase() === cleaned
+  );
+  if (exact) return exact;
+
+  // 2. If user typed just the trailing 4-digit invoice suffix (e.g. "1042" for "ZMS-20261109-1042")
+  if (/^\d{3,6}$/.test(cleaned)) {
+    return sales.find((s) =>
+      s.invoiceNumber.trim().toLowerCase().endsWith(`-${cleaned}`)
+    );
+  }
+
+  return undefined;
+}
+
+/**
+ * Parses raw 1D, 2D QR, GS1 DataMatrix, or Receipt Invoice Barcode scanned by camera or hardware barcode gun
  */
 export function parseScannedCode(
   rawCode: string,
-  medicines: MedicineItem[]
+  medicines: MedicineItem[],
+  sales?: SaleTransaction[]
 ): ParsedCodeResult {
   const trimmed = rawCode.trim();
 
-  // 1. Try parsing JSON format (used in internal custom QR labels)
+  // 0. Check if the scanned code matches a Sale Receipt Invoice Barcode first
+  if (sales && sales.length > 0) {
+    const matchedReceipt = findSaleByReceiptCode(trimmed, sales);
+    if (matchedReceipt) {
+      return {
+        raw: trimmed,
+        barcode: matchedReceipt.invoiceNumber,
+        matchedSale: matchedReceipt,
+      };
+    }
+  }
+
+  // 1. Try parsing JSON format (used in internal custom QR labels or QR receipts)
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     try {
       const parsed = JSON.parse(trimmed);
+      if (sales && (parsed.invoiceNumber || parsed.invoice || parsed.txnId)) {
+        const invKey = parsed.invoiceNumber || parsed.invoice || parsed.txnId;
+        const matchedSale = findSaleByReceiptCode(String(invKey), sales);
+        if (matchedSale) {
+          return {
+            raw: trimmed,
+            barcode: matchedSale.invoiceNumber,
+            matchedSale,
+          };
+        }
+      }
+
       const barcode = parsed.barcode || parsed.sku || parsed.id || '';
       const matched = medicines.find(
         (m) =>

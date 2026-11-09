@@ -25,6 +25,84 @@ function sanitizeImageUrl(url?: string): string {
   return '';
 }
 
+/**
+ * Standard Code-128 (Set B) 11-module bit patterns (values 0..106)
+ * Allows genuine 1D laser/CCD barcode scanners and camera scanners to scan printed receipts.
+ */
+const CODE128_PATTERNS: string[] = [
+  '11011001100', '11001101100', '11001100110', '10010011000', '10010001100',
+  '10001001100', '10011001000', '10011000100', '10001100100', '11001001000',
+  '11001000100', '11000100100', '10110011100', '10011011100', '10011001110',
+  '10111001100', '10011101100', '10011100110', '11001110010', '11001011100',
+  '11001001110', '11011100100', '11001110100', '11101101110', '11101001100',
+  '11100101100', '11100100110', '11101100100', '11100110100', '11100110010',
+  '11011011000', '11011000110', '11000110110', '10100011000', '10001011000',
+  '10001000110', '10110001000', '10001101000', '10001100010', '11010001000',
+  '11000101000', '11000100010', '10110111000', '10110001110', '10001101110',
+  '10111011000', '10111000110', '10001110110', '11101110110', '11010001110',
+  '11000101110', '11011101000', '11011100010', '11011101110', '11101011000',
+  '11101000110', '11100010110', '11101101000', '11101100010', '11100011010',
+  '11101111010', '11001000010', '11110001010', '10100110000', '10100001100',
+  '10010110000', '10010000110', '10000101100', '10000100110', '10110010000',
+  '10110000100', '10011010000', '10011000010', '10000110100', '10000110010',
+  '11000010010', '11001010000', '11110111010', '11000010100', '10001111010',
+  '10100111100', '10010111100', '10010011110', '10111100100', '10011110100',
+  '10011110010', '11110100100', '11110010100', '11110010010', '11011011110',
+  '11011110110', '11110110110', '10101111000', '10100011110', '10001011110',
+  '10111101000', '10111100010', '11110101000', '11110100010', '10111011110',
+  '10111101110', '11101011110', '11110101110', '11010000100', '11010010000',
+  '11010011100', '1100011101011',
+];
+
+/**
+ * Generates an inline SVG Code-128B barcode for the receipt's unique invoice number.
+ */
+export function generateInvoiceBarcodeSvg(
+  invoiceNumber: string,
+  heightPx: number = 38
+): string {
+  const cleanText = (invoiceNumber || 'ZMS-0000').trim().toUpperCase();
+  const startCodeB = 104;
+  let checksum = startCodeB;
+  const patterns: string[] = [CODE128_PATTERNS[startCodeB]];
+
+  for (let i = 0; i < cleanText.length; i++) {
+    const charCode = cleanText.charCodeAt(i);
+    // Printable ASCII 32..126 maps to Code 128B value 0..94
+    const value = charCode >= 32 && charCode <= 126 ? charCode - 32 : 0;
+    patterns.push(CODE128_PATTERNS[value]);
+    checksum += value * (i + 1);
+  }
+
+  const checksumValue = checksum % 103;
+  patterns.push(CODE128_PATTERNS[checksumValue]);
+  patterns.push(CODE128_PATTERNS[106]); // Stop pattern (13 modules)
+
+  const fullBitString = patterns.join('');
+  const quietZone = 10;
+  const totalModules = fullBitString.length + quietZone * 2;
+
+  let rects = '';
+  let i = 0;
+  while (i < fullBitString.length) {
+    if (fullBitString[i] === '1') {
+      let runLength = 1;
+      while (
+        i + runLength < fullBitString.length &&
+        fullBitString[i + runLength] === '1'
+      ) {
+        runLength++;
+      }
+      rects += `<rect x="${quietZone + i}" y="0" width="${runLength}" height="${heightPx}" fill="#0f172a" />`;
+      i += runLength;
+    } else {
+      i++;
+    }
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalModules} ${heightPx}" style="width: 100%; max-width: 230px; height: ${heightPx}px; display: block; margin: 0 auto;" shape-rendering="crispEdges">${rects}</svg>`;
+}
+
 export function generateReceiptHtml(
   txn: SaleTransaction,
   format: PrintFormat = 'thermal-80',
@@ -37,6 +115,8 @@ export function generateReceiptHtml(
   const containerWidth = isThermal58 ? '54mm' : isA4 ? '190mm' : '72mm';
   const fontSize = isThermal58 ? '10px' : isA4 ? '13px' : '11px';
   const safeLogoUrl = sanitizeImageUrl(details.logoUrl);
+  const barcodeHeight = isThermal58 ? 30 : isA4 ? 44 : 36;
+  const barcodeSvg = generateInvoiceBarcodeSvg(txn.invoiceNumber, barcodeHeight);
 
   const itemsHtml = txn.items
     .map((item, idx) => {
@@ -132,6 +212,17 @@ export function generateReceiptHtml(
         <div style="display: flex; justify-content: space-between; font-size: 0.9em; margin-top: 2px;">
           <span>Tendered: Rs. ${Number(txn.receivedAmount).toLocaleString('en-PK')}</span>
           <span>Change: Rs. ${Number(txn.changeAmount).toLocaleString('en-PK')}</span>
+        </div>
+      </div>
+
+      <!-- Scannable Unique Receipt Barcode for Instant Counter Return / Refund -->
+      <div style="text-align: center; border-top: 1px dashed #64748b; padding: 7px 0 5px 0; margin-bottom: 4px;">
+        ${barcodeSvg}
+        <div style="font-size: 0.85em; font-weight: 800; letter-spacing: 1.5px; margin-top: 3px; color: #0f172a;">
+          *${escapeHtml(txn.invoiceNumber)}*
+        </div>
+        <div style="font-size: 0.75em; color: #475569; margin-top: 1px;">
+          Scan receipt barcode or enter Invoice # at POS for Return/Exchange
         </div>
       </div>
 
