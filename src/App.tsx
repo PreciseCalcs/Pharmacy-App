@@ -75,6 +75,7 @@ export default function App() {
   const [khataCustomers, setKhataCustomers] = useState<CustomerKhata[]>(syncEngine.getKhataCustomers());
   const [alerts, setAlerts] = useState(syncEngine.getAlerts());
   const [externalInventoryFilter, setExternalInventoryFilter] = useState<InventoryStockFilter | null>(null);
+  const [initialReportSection, setInitialReportSection] = useState<'invoices' | 'products' | null>(null);
 
   // Modals
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -881,6 +882,10 @@ export default function App() {
                 setSelectedMedicineForEdit(med || null);
                 setIsMedicineModalOpen(true);
               }}
+              onOpenProductTrackRecord={() => {
+                setInitialReportSection('products');
+                handleNavigateTab('reports', '⚡ Frequently Sold Products & Medicines Track Record');
+              }}
             />
           )}
 
@@ -948,6 +953,7 @@ export default function App() {
           {activeTab === 'reports' && (
             <ReportsView
               sales={sales}
+              medicines={medicines}
               onSelectTransaction={(txn) => {
                 setSelectedInvoice(txn);
                 setIsInvoiceModalOpen(true);
@@ -959,6 +965,8 @@ export default function App() {
               canProcessRefund={
                 currentUser.role === 'owner' || currentUser.role === 'pharmacist'
               }
+              initialReportSection={initialReportSection}
+              onReportSectionConsumed={() => setInitialReportSection(null)}
             />
           )}
 

@@ -331,3 +331,70 @@ export function exportCriticalStockToCSV(medicines: MedicineItem[], categoryFilt
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
+
+/**
+ * Exports the Frequently Sold Products & Medicines Track Record to Excel (.xlsx)
+ */
+export function exportProductTrackRecordToExcel(
+  records: Array<{
+    name: string;
+    genericName: string;
+    departmentLabel: string;
+    category: string;
+    strength: string;
+    invoiceCount: number;
+    packsSold: number;
+    looseUnitsSold: number;
+    totalPiecesDispensed: number;
+    totalRevenue: number;
+    totalProfit: number;
+    revenueSharePercent: number;
+    currentStockPacks: number;
+    velocityTier: string;
+    lastSoldAt: string;
+  }>,
+  includeProfits = true
+): void {
+  const rows = records.map((r, idx) => {
+    const base: Record<string, unknown> = {
+      Rank: idx + 1,
+      'Product / Medicine Name': r.name,
+      'Generic / Formula': r.genericName,
+      Department: r.departmentLabel,
+      Category: r.category,
+      Strength: r.strength || '-',
+      'Velocity Status':
+        r.velocityTier === 'fast_mover'
+          ? 'FAST MOVER'
+          : r.velocityTier === 'steady'
+          ? 'STEADY SELLER'
+          : r.velocityTier === 'occasional'
+          ? 'OCCASIONAL'
+          : 'NO SALES YET',
+      'Receipts / Bill Frequency': r.invoiceCount,
+      'Full Packs Sold': r.packsSold,
+      'Loose Units Sold': r.looseUnitsSold,
+      'Total Pieces Dispensed': r.totalPiecesDispensed,
+      'Total Sales Revenue (PKR)': r.totalRevenue,
+      'Revenue Share (%)': `${r.revenueSharePercent}%`,
+    };
+
+    if (includeProfits) {
+      base['Net Profit (PKR)'] = r.totalProfit;
+    }
+
+    base['Current Stock (Packs)'] = r.currentStockPacks;
+    base['Last Sold Date'] = r.lastSoldAt ? formatDateTime(r.lastSoldAt) : 'Not sold in period';
+    return base;
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Product Sales Track Record');
+
+  const fileName = `Zahid_Medical_Fast_Moving_Track_Record_${new Date()
+    .toISOString()
+    .slice(0, 10)}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+}
+

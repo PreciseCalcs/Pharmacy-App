@@ -34,6 +34,7 @@ import {
 } from 'recharts';
 import { MedicineItem, SaleTransaction, PharmacyDetails } from '../types/pharmacy';
 import { formatPKR, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
+import { buildProductSalesTrackRecord } from '../utils/productVelocity';
 import { isToday } from '../utils/dates';
 import { syncEngine } from '../services/syncEngine';
 import { generatePurchaseOrderPDF } from '../services/pdfGenerator';
@@ -45,6 +46,7 @@ interface DashboardViewProps {
   pharmacyDetails: PharmacyDetails;
   onNavigateTab: (tab: string) => void;
   onOpenMedicineModal: (med?: MedicineItem) => void;
+  onOpenProductTrackRecord?: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -53,6 +55,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   pharmacyDetails,
   onNavigateTab,
   onOpenMedicineModal,
+  onOpenProductTrackRecord,
 }) => {
   const activeCounter = syncEngine.getActiveCounter();
 
@@ -193,20 +196,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return last7DaysData.reduce((max, d) => (d.revenue > max.revenue ? d : max), last7DaysData[0]);
   }, [last7DaysData]);
 
-  // Most dispensed calculation (100% real recorded completed sales)
-  const medicineDispenseCounts: Record<string, { name: string; quantity: number }> = {};
-  completedSales.forEach((s) => {
-    s.items.forEach((item) => {
-      if (!medicineDispenseCounts[item.medicineId]) {
-        medicineDispenseCounts[item.medicineId] = { name: item.medicineName, quantity: 0 };
-      }
-      medicineDispenseCounts[item.medicineId].quantity += item.quantity;
-    });
-  });
+  // Frequently sold medicines & store products track record (100% real recorded sales)
+  const [topSellerFilter, setTopSellerFilter] = useState<'all' | 'pharmacy' | 'general'>('all');
 
-  const mostDispensedList = Object.values(medicineDispenseCounts)
-    .sort((a, b) => b.quantity - a.quantity)
-    .slice(0, 5);
+  const fullTrackRecord = useMemo(
+    () => buildProductSalesTrackRecord(completedSales, medicines, false),
+    [completedSales, medicines]
+  );
+
+  const filteredTopSellers = useMemo(() => {
+    return fullTrackRecord
+      .filter((item) => {
+        if (topSellerFilter === 'pharmacy') return item.department === 'pharmacy';
+        if (topSellerFilter === 'general') return item.department !== 'pharmacy';
+        return true;
+      })
+      .slice(0, 6);
+  }, [fullTrackRecord, topSellerFilter]);
+
+  const maxTopSellerUnits = useMemo(
+    () => Math.max(1, ...filteredTopSellers.map((i) => i.totalUnitsSold)),
+    [filteredTopSellers]
+  );
 
   const recentTransactions = sales.slice(0, 5);
 
@@ -731,32 +742,179 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* SECTION: Most Dispensed */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-3">
-        <div>
-          <h2 className="text-base font-bold text-slate-900">Most dispensed</h2>
-          <p className="text-xs text-slate-500">Based on recorded counter sales.</p>
-        </div>
-
-        {mostDispensedList.length === 0 ? (
-          <div className="py-6 text-center text-slate-400 text-xs">
-            No items dispensed yet. Top-selling items will appear here as sales are recorded.
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-100 text-xs">
-            {mostDispensedList.map((item, idx) => (
-              <div key={idx} className="py-2.5 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-slate-400 font-semibold text-[11px]">
-                    0{idx + 1}
-                  </span>
-                  <span className="font-bold text-slate-900">{item.name}</span>
-                </div>
-                <span className="text-slate-500 font-sans">
-                  {item.quantity} sold
+      {/* SECTION: Frequently Sold Medicines & Store Products Widget */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-base font-bold text-slate-900">
+                  Frequently Sold Medicines &amp; Store Products
+                </h2>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[10px] font-bold">
+                  {fullTrackRecord.length} active sellers
                 </span>
               </div>
-            ))}
+              <p className="text-xs text-slate-500 mt-0.5">
+                Fast-moving medicines, personal care, baby items, and FMCG ranked by counter sale frequency.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Department Filter Pills */}
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs">
+              {[
+                { id: 'all', label: 'All Items' },
+                { id: 'pharmacy', label: 'Medicines' },
+                { id: 'general', label: 'Store & Personal Care' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    soundService.click();
+                    setTopSellerFilter(tab.id as 'all' | 'pharmacy' | 'general');
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${
+                    topSellerFilter === tab.id
+                      ? 'bg-white text-slate-900 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                soundService.click();
+                if (onOpenProductTrackRecord) {
+                  onOpenProductTrackRecord();
+                } else {
+                  onNavigateTab('reports');
+                }
+              }}
+              className="px-3 py-1.5 rounded-xl bg-[#083322] hover:bg-[#0c432d] text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <span>Complete Track Record</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {filteredTopSellers.length === 0 ? (
+          <div className="py-8 text-center text-slate-400 text-xs border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+            <ShoppingBag className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+            <p className="font-semibold text-slate-700">
+              No sales recorded in this category yet.
+            </p>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Dispense medicines or general store products at the POS counter to build your live sales velocity track record.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            {filteredTopSellers.map((item, idx) => {
+              const barPct = Math.max(
+                10,
+                Math.min(100, Math.round((item.totalUnitsSold / maxTopSellerUnits) * 100))
+              );
+
+              return (
+                <div
+                  key={item.medicineId || idx}
+                  className="p-3.5 rounded-xl border border-slate-200 hover:border-emerald-300 bg-white transition flex flex-col justify-between gap-2.5"
+                >
+                  <div className="flex items-start justify-between gap-2.5">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <div
+                        className={`w-8 h-8 rounded-lg font-mono font-black text-xs flex items-center justify-center shrink-0 ${
+                          idx === 0
+                            ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                            : idx === 1
+                            ? 'bg-slate-200 text-slate-800'
+                            : idx === 2
+                            ? 'bg-orange-100 text-orange-900'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        #{idx + 1}
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-bold text-slate-900 truncate">{item.name}</span>
+                          <span
+                            className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
+                              item.department === 'pharmacy'
+                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                : 'bg-sky-50 text-sky-800 border border-sky-200'
+                            }`}
+                          >
+                            {item.departmentLabel}
+                          </span>
+                          {item.velocityTier === 'fast_mover' && (
+                            <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-amber-100 text-amber-900">
+                              Fast Mover
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500 font-mono truncate mt-0.5">
+                          {item.genericName} {item.strength ? `• ${item.strength}` : ''}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <div className="font-mono font-black text-slate-900">
+                        {formatPKR(item.totalRevenue)}
+                      </div>
+                      <div className="text-[10px] text-emerald-700 font-semibold">
+                        {item.invoiceCount} {item.invoiceCount === 1 ? 'receipt' : 'receipts'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Velocity Progress Bar & Breakdown */}
+                  <div className="space-y-1.5">
+                    <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-600 rounded-full transition-all duration-300"
+                        style={{ width: `${barPct}%` }}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                      <span>
+                        Sold:{' '}
+                        <strong className="text-slate-800">
+                          {item.packsSold > 0 ? `${item.packsSold} packs` : ''}
+                          {item.packsSold > 0 && item.looseUnitsSold > 0 ? ' + ' : ''}
+                          {item.looseUnitsSold > 0 ? `${item.looseUnitsSold} loose` : ''}
+                          {item.packsSold === 0 && item.looseUnitsSold === 0
+                            ? `${item.totalUnitsSold} units`
+                            : ''}
+                        </strong>
+                      </span>
+                      <span
+                        className={
+                          item.isLowStock ? 'text-rose-600 font-bold' : 'text-slate-500'
+                        }
+                      >
+                        Stock: {item.currentStockPacks} packs
+                        {item.isLowStock ? ' (Low!)' : ''}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
