@@ -1,5 +1,5 @@
 import jsPDF from 'jspdf';
-import { MedicineItem, SaleTransaction, ZAHID_PHARMACY_DETAILS } from '../types/pharmacy';
+import { MedicineItem, SaleTransaction, ShortBookEntry, ZAHID_PHARMACY_DETAILS } from '../types/pharmacy';
 import { formatDateTime } from '../utils/dates';
 import { formatPKR, getPieceRetailPrice } from '../utils/pharmacyHelpers';
 import { syncEngine } from './syncEngine';
@@ -434,6 +434,67 @@ export function generatePurchaseOrderPDF(
     });
   }
 
+  // Also include Counter Short Book (Patient Want List) entries if any exist
+  const shortBookEntries = syncEngine.getShortBook();
+  if (shortBookEntries.length > 0) {
+    if (y > 240) {
+      doc.addPage();
+      y = 20;
+    } else {
+      y += 6;
+    }
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(
+      `COUNTER SHORT BOOK / PATIENT DEMAND LIST (${shortBookEntries.length} REQUESTED ITEMS)`,
+      14,
+      y
+    );
+    y += 5;
+
+    doc.setFillColor(254, 243, 199);
+    doc.rect(14, y, pageWidth - 28, 7, 'F');
+    doc.setFontSize(8);
+    doc.text('#', 16, y + 5);
+    doc.text('Requested Medicine / Item', 24, y + 5);
+    doc.text('Strength / Pack', 90, y + 5);
+    doc.text('Supplier / Note', 125, y + 5);
+    doc.text('Asked', 162, y + 5);
+    doc.text('Order Qty', pageWidth - 16, y + 5, { align: 'right' });
+
+    y += 10;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+
+    shortBookEntries.forEach((entry, idx) => {
+      if (y > 265) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.text(String(idx + 1), 16, y);
+      doc.setFont('helvetica', entry.priority === 'urgent' ? 'bold' : 'normal');
+      doc.text(
+        `${entry.itemName}${entry.priority === 'urgent' ? ' [URGENT]' : ''}`.slice(0, 36),
+        24,
+        y
+      );
+      doc.setFont('helvetica', 'normal');
+      doc.text((entry.strengthOrPack || '-').slice(0, 18), 90, y);
+      doc.text((entry.supplierName || entry.customerNote || '-').slice(0, 20), 125, y);
+      doc.text(`${entry.requestCount}x`, 163, y);
+      doc.setFont('helvetica', 'bold');
+      doc.text(
+        `+${entry.requestedPacks} pk${entry.status === 'ordered' ? ' [ORD]' : ''}`,
+        pageWidth - 16,
+        y,
+        { align: 'right' }
+      );
+      doc.setFont('helvetica', 'normal');
+      y += 5.5;
+    });
+  }
+
   // Grand Total & Signature Block
   if (y > 248) {
     doc.addPage();
@@ -485,4 +546,106 @@ export function generatePurchaseOrderPDF(
   const safeSlug = details.name.replace(/[^a-zA-Z0-9]+/g, '_');
   doc.save(`${safeSlug}_Purchase_Order_${new Date().toISOString().slice(0, 10)}.pdf`);
 }
+
+export function generateShortBookPDF(entries?: ShortBookEntry[]): void {
+  const details = syncEngine.getPharmacyDetails() || ZAHID_PHARMACY_DETAILS;
+  const list = entries || syncEngine.getShortBook();
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const dateCompact = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const refNo = `SB-${dateCompact}-${String(list.length).padStart(3, '0')}`;
+  let y = 16;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.text(details.name, pageWidth / 2, y, { align: 'center' });
+
+  y += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text(`${details.address}, ${details.city}`, pageWidth / 2, y, { align: 'center' });
+
+  y += 5;
+  doc.setFontSize(9);
+  doc.text(
+    `Drug Licence: ${details.drugLicenceNumber} | Phone: ${details.phone}`,
+    pageWidth / 2,
+    y,
+    { align: 'center' }
+  );
+
+  y += 6;
+  doc.setLineWidth(0.5);
+  doc.line(14, y, pageWidth - 14, y);
+
+  y += 8;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13.5);
+  doc.text('COUNTER SHORT BOOK / ORDER BOOKER WANT LIST', 14, y);
+
+  doc.setFontSize(9);
+  doc.text(`Ref: ${refNo}`, pageWidth - 14, y, { align: 'right' });
+
+  const totalPacks = list.reduce((s, e) => s + (e.requestedPacks || 0), 0);
+  const urgentCount = list.filter((e) => e.priority === 'urgent').length;
+
+  y += 7;
+  doc.setFillColor(254, 243, 199);
+  doc.rect(14, y, pageWidth - 28, 12, 'F');
+  doc.setFontSize(8.5);
+  doc.text(`Requested Items: ${list.length}`, 18, y + 7.5);
+  doc.text(`Urgent Requests: ${urgentCount}`, 75, y + 7.5);
+  doc.text(`Total Packs to Order: +${totalPacks} packs`, 130, y + 7.5);
+
+  y += 17;
+  doc.setFillColor(229, 231, 235);
+  doc.rect(14, y, pageWidth - 28, 7, 'F');
+  doc.setFontSize(8);
+  doc.text('#', 16, y + 5);
+  doc.text('Medicine / Item Name', 24, y + 5);
+  doc.text('Strength / Pack', 88, y + 5);
+  doc.text('Supplier / Patient Note', 122, y + 5);
+  doc.text('Asked', 162, y + 5);
+  doc.text('Order Qty', pageWidth - 16, y + 5, { align: 'right' });
+
+  y += 10;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+
+  list.forEach((item, idx) => {
+    if (y > 268) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.text(String(idx + 1), 16, y);
+    doc.setFont('helvetica', item.priority === 'urgent' ? 'bold' : 'normal');
+    doc.text(
+      `${item.itemName}${item.priority === 'urgent' ? ' [URGENT]' : ''}`.slice(0, 35),
+      24,
+      y
+    );
+    doc.setFont('helvetica', 'normal');
+    doc.text((item.strengthOrPack || '-').slice(0, 18), 88, y);
+    doc.text((item.supplierName || item.customerNote || '-').slice(0, 20), 122, y);
+    doc.text(`${item.requestCount}x`, 163, y);
+    doc.setFont('helvetica', 'bold');
+    doc.text(
+      `+${item.requestedPacks} pk${item.status === 'ordered' ? ' [ORD]' : ''}`,
+      pageWidth - 16,
+      y,
+      { align: 'right' }
+    );
+    doc.setFont('helvetica', 'normal');
+    y += 6;
+  });
+
+  const safeSlug = details.name.replace(/[^a-zA-Z0-9]+/g, '_');
+  doc.save(`${safeSlug}_Short_Book_Demand_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
 

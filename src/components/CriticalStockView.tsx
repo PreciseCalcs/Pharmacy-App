@@ -17,11 +17,17 @@ import {
   Truck,
   RotateCcw,
   Printer,
+  ClipboardList,
+  Plus,
+  Minus,
+  Trash2,
+  Flame,
 } from 'lucide-react';
-import { MedicineItem } from '../types/pharmacy';
+import { MedicineItem, ShortBookEntry } from '../types/pharmacy';
 import { exportCriticalStockToExcel, exportCriticalStockToCSV } from '../services/excelExporter';
-import { generatePurchaseOrderPDF } from '../services/pdfGenerator';
+import { generatePurchaseOrderPDF, generateShortBookPDF } from '../services/pdfGenerator';
 import { soundService } from '../services/soundAlerts';
+import { syncEngine } from '../services/syncEngine';
 
 interface CriticalStockViewProps {
   medicines: MedicineItem[];
@@ -36,12 +42,47 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
   onOpenMedicineModal,
   canEdit,
 }) => {
+  const [activeSubTab, setActiveSubTab] = useState<'threshold' | 'short_book'>('threshold');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedDepartment] = useState<string>('all');
   const [urgencyFilter, setUrgencyFilter] = useState<'all' | 'out_of_stock' | 'severe'>('all');
   const [reorderStatusFilter, setReorderStatusFilter] = useState<'all' | 'needed' | 'ordered'>('all');
   const [groupByCategory, setGroupByCategory] = useState(false);
+
+  // Counter Short Book (Want List) state
+  const [shortBookItems, setShortBookItems] = useState<ShortBookEntry[]>(() =>
+    syncEngine.getShortBook()
+  );
+  const [sbName, setSbName] = useState('');
+  const [sbStrength, setSbStrength] = useState('');
+  const [sbSupplier, setSbSupplier] = useState('');
+  const [sbPacks, setSbPacks] = useState('5');
+  const [sbUrgent, setSbUrgent] = useState(false);
+
+  const refreshShortBook = () => {
+    setShortBookItems(syncEngine.getShortBook());
+  };
+
+  const handleAddShortBookItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sbName.trim()) return;
+    syncEngine.addToShortBook({
+      itemName: sbName.trim(),
+      strengthOrPack: sbStrength.trim() || undefined,
+      supplierName: sbSupplier.trim() || undefined,
+      requestedPacks: Math.max(1, parseInt(sbPacks, 10) || 5),
+      priority: sbUrgent ? 'urgent' : 'normal',
+      addedBy: 'Counter Staff',
+    });
+    soundService.cashRegister();
+    setSbName('');
+    setSbStrength('');
+    setSbSupplier('');
+    setSbPacks('5');
+    setSbUrgent(false);
+    refreshShortBook();
+  };
 
   // Filter medicines below their reorder threshold
   const criticalItems = useMemo(() => {
@@ -328,25 +369,25 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
             </span>
           </div>
 
-          <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-200">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-800 block">
-              Reorder Status
+          <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-300">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 block">
+              Counter Short Book
             </span>
             <div className="flex items-baseline gap-1.5 mt-0.5">
-              <span className="text-xl sm:text-2xl font-black text-emerald-700 font-mono">
-                {orderedCount}
+              <span className="text-xl sm:text-2xl font-black text-amber-900 font-mono">
+                {shortBookItems.length}
               </span>
-              <span className="text-xs font-bold text-slate-500">
-                ordered / {pendingOrderCount} pending
+              <span className="text-xs font-bold text-amber-800">
+                patient wants
               </span>
             </div>
           </div>
 
-          <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">
+          <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-200">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-800 block">
               Total Deficit Quantity
             </span>
-            <span className="text-xl sm:text-2xl font-black text-amber-950 font-mono mt-0.5 block">
+            <span className="text-xl sm:text-2xl font-black text-blue-950 font-mono mt-0.5 block">
               +{totalDeficitPacks} packs
             </span>
           </div>
@@ -360,7 +401,336 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
             </span>
           </div>
         </div>
+
+        {/* Sub-Tab Switcher: Auto Low-Stock Threshold vs. Counter Short Book (Want List) */}
+        <div className="flex items-center gap-2 mt-4 pt-4 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveSubTab('threshold');
+              soundService.click();
+            }}
+            className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition cursor-pointer ${
+              activeSubTab === 'threshold'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            <ShieldAlert className="w-4 h-4 text-rose-400" />
+            <span>Auto Low-Stock Threshold ({totalCriticalCount})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveSubTab('short_book');
+              refreshShortBook();
+              soundService.click();
+            }}
+            className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition cursor-pointer ${
+              activeSubTab === 'short_book'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+            }`}
+          >
+            <ClipboardList className="w-4 h-4" />
+            <span>Counter Short Book / Want List ({shortBookItems.length})</span>
+          </button>
+        </div>
       </div>
+
+      {activeSubTab === 'short_book' ? (
+        <div className="space-y-4">
+          {/* Quick-Add Bar for Counter Short Book */}
+          <div className="bg-white rounded-2xl border border-amber-200 p-5 shadow-2xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <ClipboardList className="w-5 h-5 text-amber-600" />
+                  <span>Counter "Short Book" / Order Booker Demand Register</span>
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Medicines requested by patients at the POS counter that were out of stock or not yet in your catalog. Ready for distributor order bookers.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {shortBookItems.some((i) => i.status === 'ordered') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      syncEngine.clearOrderedShortBookEntries();
+                      refreshShortBook();
+                      soundService.click();
+                    }}
+                    className="px-3 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Clear Ordered</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundService.click();
+                    generateShortBookPDF(shortBookItems);
+                  }}
+                  disabled={shortBookItems.length === 0}
+                  className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Print Short Book PDF</span>
+                </button>
+              </div>
+            </div>
+
+            <form
+              onSubmit={handleAddShortBookItem}
+              className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 pt-2 border-t border-slate-100 text-xs"
+            >
+              <input
+                type="text"
+                value={sbName}
+                onChange={(e) => setSbName(e.target.value)}
+                placeholder="Medicine / Brand requested by patient (e.g. Risek 40mg, Glucophage XR)..."
+                className="sm:col-span-4 px-3 py-2 rounded-xl border border-slate-300 font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                required
+              />
+              <input
+                type="text"
+                value={sbStrength}
+                onChange={(e) => setSbStrength(e.target.value)}
+                placeholder="Strength / Form (e.g. 40mg Cap)"
+                className="sm:col-span-2 px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <input
+                type="text"
+                value={sbSupplier}
+                onChange={(e) => setSbSupplier(e.target.value)}
+                placeholder="Distributor / Company (optional)"
+                className="sm:col-span-2 px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <div className="sm:col-span-2 flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  value={sbPacks}
+                  onChange={(e) => setSbPacks(e.target.value)}
+                  className="w-20 px-2.5 py-2 rounded-xl border border-slate-300 font-mono font-bold text-center"
+                  title="Packs to order"
+                />
+                <label className="flex items-center gap-1 text-xs font-bold text-rose-700 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={sbUrgent}
+                    onChange={(e) => setSbUrgent(e.target.checked)}
+                    className="rounded border-rose-300 text-rose-600 focus:ring-rose-500"
+                  />
+                  <span>Urgent</span>
+                </label>
+              </div>
+              <button
+                type="submit"
+                className="sm:col-span-2 py-2 px-3 rounded-xl bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add to Short Book</span>
+              </button>
+            </form>
+          </div>
+
+          {/* Short Book Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+            {shortBookItems.length === 0 ? (
+              <div className="p-12 text-center text-slate-400">
+                <ClipboardList className="w-10 h-10 mx-auto text-amber-400 mb-2 stroke-1" />
+                <p className="text-sm font-bold text-slate-800">Counter Short Book is Empty</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  When a patient asks for a medicine not in stock, click "+ Add to Short Book" from the POS search bar or add it above.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-slate-500 uppercase text-[10px] tracking-wider font-bold">
+                      <th className="py-3 px-3 w-10 text-center">Ordered</th>
+                      <th className="py-3 px-3.5">Requested Medicine / Item</th>
+                      <th className="py-3 px-3">Distributor / Supplier</th>
+                      <th className="py-3 px-3 text-center">Patient Demand</th>
+                      <th className="py-3 px-3 text-center">Packs to Order</th>
+                      <th className="py-3 px-3">Logged By</th>
+                      <th className="py-3 px-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {shortBookItems.map((entry) => {
+                      const isOrd = entry.status === 'ordered';
+                      return (
+                        <tr
+                          key={entry.id}
+                          className={`transition ${
+                            isOrd ? 'bg-emerald-50/30' : 'hover:bg-slate-50/80'
+                          }`}
+                        >
+                          <td className="py-3 px-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isOrd}
+                              onChange={() => {
+                                syncEngine.updateShortBookEntry(entry.id, {
+                                  status: isOrd ? 'pending' : 'ordered',
+                                  orderedAt: !isOrd ? new Date().toISOString() : undefined,
+                                });
+                                refreshShortBook();
+                                soundService.click();
+                              }}
+                              className="w-4 h-4 rounded border-slate-300 text-emerald-600 cursor-pointer accent-emerald-600"
+                            />
+                          </td>
+
+                          <td className="py-3 px-3.5">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span
+                                className={`font-bold text-xs sm:text-sm ${
+                                  isOrd ? 'line-through text-slate-500' : 'text-slate-900'
+                                }`}
+                              >
+                                {entry.itemName}
+                              </span>
+                              {entry.priority === 'urgent' && (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px] font-black uppercase flex items-center gap-0.5">
+                                  <Flame className="w-3 h-3" />
+                                  <span>Urgent</span>
+                                </span>
+                              )}
+                              {isOrd && (
+                                <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold uppercase">
+                                  Ordered
+                                </span>
+                              )}
+                            </div>
+                            {entry.strengthOrPack && (
+                              <div className="text-[11px] text-slate-500 font-mono">
+                                {entry.strengthOrPack}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="py-3 px-3 text-slate-600">
+                            {entry.supplierName || 'Any Distributor / Order Booker'}
+                          </td>
+
+                          <td className="py-3 px-3 text-center">
+                            <div className="inline-flex items-center gap-1.5">
+                              <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-mono font-bold text-xs">
+                                Asked {entry.requestCount}x
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  syncEngine.updateShortBookEntry(entry.id, {
+                                    requestCount: (entry.requestCount || 1) + 1,
+                                    priority:
+                                      (entry.requestCount || 1) + 1 >= 3 ? 'urgent' : entry.priority,
+                                  });
+                                  refreshShortBook();
+                                  soundService.click();
+                                }}
+                                className="px-1.5 py-0.5 rounded border border-amber-300 hover:bg-amber-50 text-amber-900 font-bold text-[10px] cursor-pointer"
+                                title="Another patient asked for this item (+1)"
+                              >
+                                +1 Ask
+                              </button>
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-3 text-center">
+                            <div className="inline-flex items-center gap-1.5 font-mono">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  syncEngine.updateShortBookEntry(entry.id, {
+                                    requestedPacks: Math.max(1, entry.requestedPacks - 1),
+                                  });
+                                  refreshShortBook();
+                                  soundService.click();
+                                }}
+                                className="p-1 rounded border border-slate-300 hover:bg-slate-100 text-slate-700"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <span className="font-bold text-slate-900 w-12 text-center">
+                                {entry.requestedPacks} pk
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  syncEngine.updateShortBookEntry(entry.id, {
+                                    requestedPacks: entry.requestedPacks + 1,
+                                  });
+                                  refreshShortBook();
+                                  soundService.click();
+                                }}
+                                className="p-1 rounded border border-slate-300 hover:bg-slate-100 text-slate-700"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-3 text-[11px] text-slate-500">
+                            <div className="font-semibold text-slate-700">{entry.addedBy}</div>
+                            <div>{new Date(entry.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                          </td>
+
+                          <td className="py-3 px-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  syncEngine.updateShortBookEntry(entry.id, {
+                                    status: isOrd ? 'pending' : 'ordered',
+                                    orderedAt: !isOrd ? new Date().toISOString() : undefined,
+                                  });
+                                  refreshShortBook();
+                                  soundService.click();
+                                }}
+                                className={`px-2.5 py-1 rounded-lg font-bold text-xs transition cursor-pointer ${
+                                  isOrd
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'border border-slate-300 hover:bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                {isOrd ? 'Ordered' : 'Mark Ordered'}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  syncEngine.deleteShortBookEntry(entry.id);
+                                  refreshShortBook();
+                                  soundService.click();
+                                }}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                                title="Remove from Short Book"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
 
       {/* 3. Filter Bar & Controls */}
       <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
@@ -574,6 +944,8 @@ export const CriticalStockView: React.FC<CriticalStockViewProps> = ({
             </table>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

@@ -452,3 +452,22 @@ export interface MonthlyAuditSnapshot {
   notes?: string;
 }
 
+export interface ShortBookEntry {
+  id: string;
+  itemName: string;
+  strengthOrPack?: string;
+  supplierName?: string;
+  requestedPacks: number;
+  requestCount: number; // Number of times patients asked for this item at the counter
+  priority: 'normal' | 'urgent';
+  status: 'pending' | 'ordered';
+  linkedMedicineId?: string;
+  addedBy: string;
+  counterName?: string;
+  customerNote?: string;
+  createdAt: string;
+  updatedAt: string;
+  orderedAt?: string;
+}
+
+

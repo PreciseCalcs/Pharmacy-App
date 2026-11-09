@@ -14,7 +14,8 @@ import {
   INITIAL_KHATA_CUSTOMERS,
   UserAccount,
   ExpenseRecord,
-  MonthlyAuditSnapshot
+  MonthlyAuditSnapshot,
+  ShortBookEntry
 } from '../types/pharmacy';
 import { INITIAL_ZAHID_MEDICINES } from '../data/initialMedicines';
 import { getDaysUntilExpiry, getTotalPiecesInStock, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
@@ -33,6 +34,7 @@ export interface PharmacyBackupSnapshot {
   staffAccounts: UserAccount[];
   expenses?: ExpenseRecord[];
   auditSnapshots?: MonthlyAuditSnapshot[];
+  shortBook?: ShortBookEntry[];
 }
 
 const INVENTORY_STORAGE_KEY = 'zahid_med_inventory_v2';
@@ -44,6 +46,7 @@ const ACTIVE_COUNTER_KEY = 'zahid_active_counter_v1';
 const KHATA_STORAGE_KEY = 'zahid_khata_customers_v1';
 const EXPENSES_STORAGE_KEY = 'zahid_pharmacy_expenses_v1';
 const AUDIT_SNAPSHOTS_KEY = 'zahid_monthly_audits_v1';
+const SHORT_BOOK_STORAGE_KEY = 'zahid_short_book_v1';
 
 export class PharmacySyncEngine {
   private medicines: MedicineItem[] = [];
@@ -55,6 +58,7 @@ export class PharmacySyncEngine {
   private khataCustomers: CustomerKhata[] = [...INITIAL_KHATA_CUSTOMERS];
   private expenses: ExpenseRecord[] = [];
   private auditSnapshots: MonthlyAuditSnapshot[] = [];
+  private shortBook: ShortBookEntry[] = [];
   private subscribers: Array<() => void> = [];
 
   constructor() {
@@ -135,6 +139,10 @@ export class PharmacySyncEngine {
 
       const savedAudits = localStorage.getItem(AUDIT_SNAPSHOTS_KEY);
       this.auditSnapshots = savedAudits ? JSON.parse(savedAudits) : [];
+
+      // 8. Load Counter Short Book (Want List)
+      const savedShortBook = localStorage.getItem(SHORT_BOOK_STORAGE_KEY);
+      this.shortBook = savedShortBook ? JSON.parse(savedShortBook) : [];
     } catch (e) {
       console.warn('Failed to initialize local pharmacy store, falling back to defaults', e);
       this.medicines = [...INITIAL_ZAHID_MEDICINES];
@@ -146,6 +154,7 @@ export class PharmacySyncEngine {
       this.khataCustomers = [...INITIAL_KHATA_CUSTOMERS];
       this.expenses = [];
       this.auditSnapshots = [];
+      this.shortBook = [];
     }
   }
 
@@ -1338,6 +1347,132 @@ export class PharmacySyncEngine {
       .map((key) => this.calculateMonthlyAudit(key));
   }
 
+  // --- Counter Short Book / Demand Register (Want List) ---
+  public getShortBook(): ShortBookEntry[] {
+    return [...this.shortBook];
+  }
+
+  public addToShortBook(data: {
+    itemName: string;
+    strengthOrPack?: string;
+    supplierName?: string;
+    requestedPacks?: number;
+    priority?: 'normal' | 'urgent';
+    linkedMedicineId?: string;
+    addedBy: string;
+    counterName?: string;
+    customerNote?: string;
+  }): { entry: ShortBookEntry; incrementedExisting: boolean } {
+    const cleanName = data.itemName.trim();
+    if (!cleanName) {
+      throw new Error('Medicine or product name is required for Short Book.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const normalizedTarget = cleanName.toLowerCase();
+
+    // Check if an un-ordered / pending entry for this same medicine already exists
+    const existingIdx = this.shortBook.findIndex(
+      (item) =>
+        item.status === 'pending' &&
+        ((data.linkedMedicineId && item.linkedMedicineId === data.linkedMedicineId) ||
+          item.itemName.trim().toLowerCase() === normalizedTarget)
+    );
+
+    if (existingIdx > -1) {
+      const current = this.shortBook[existingIdx];
+      const updated: ShortBookEntry = {
+        ...current,
+        requestCount: (current.requestCount || 1) + 1,
+        requestedPacks: current.requestedPacks + Math.max(1, Number(data.requestedPacks) || 2),
+        priority:
+          data.priority === 'urgent' || (current.requestCount || 1) + 1 >= 3
+            ? 'urgent'
+            : current.priority,
+        supplierName: data.supplierName?.trim() || current.supplierName,
+        customerNote: data.customerNote?.trim() || current.customerNote,
+        updatedAt: nowIso,
+      };
+      // Move updated item to top of Short Book
+      this.shortBook.splice(existingIdx, 1);
+      this.shortBook.unshift(updated);
+      this.saveShortBook();
+      this.notify();
+      return { entry: updated, incrementedExisting: true };
+    }
+
+    const newEntry: ShortBookEntry = {
+      id: `sb_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      itemName: cleanName,
+      strengthOrPack: data.strengthOrPack?.trim() || undefined,
+      supplierName: data.supplierName?.trim() || undefined,
+      requestedPacks: Math.max(1, Number(data.requestedPacks) || 5),
+      requestCount: 1,
+      priority: data.priority || 'normal',
+      status: 'pending',
+      linkedMedicineId: data.linkedMedicineId,
+      addedBy: data.addedBy || 'Counter Staff',
+      counterName: data.counterName || this.activeCounter,
+      customerNote: data.customerNote?.trim() || undefined,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    this.shortBook.unshift(newEntry);
+    this.saveShortBook();
+    this.notify();
+    return { entry: newEntry, incrementedExisting: false };
+  }
+
+  public updateShortBookEntry(
+    id: string,
+    updates: Partial<ShortBookEntry>
+  ): ShortBookEntry | null {
+    const idx = this.shortBook.findIndex((item) => item.id === id);
+    if (idx === -1) return null;
+
+    const current = this.shortBook[idx];
+    const updated: ShortBookEntry = {
+      ...current,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.shortBook[idx] = updated;
+    this.saveShortBook();
+    this.notify();
+    return updated;
+  }
+
+  public deleteShortBookEntry(id: string): boolean {
+    const prevLen = this.shortBook.length;
+    this.shortBook = this.shortBook.filter((item) => item.id !== id);
+    if (this.shortBook.length !== prevLen) {
+      this.saveShortBook();
+      this.notify();
+      return true;
+    }
+    return false;
+  }
+
+  public clearOrderedShortBookEntries(): number {
+    const before = this.shortBook.length;
+    this.shortBook = this.shortBook.filter((item) => item.status !== 'ordered');
+    const removed = before - this.shortBook.length;
+    if (removed > 0) {
+      this.saveShortBook();
+      this.notify();
+    }
+    return removed;
+  }
+
+  private saveShortBook(): void {
+    try {
+      localStorage.setItem(SHORT_BOOK_STORAGE_KEY, JSON.stringify(this.shortBook));
+    } catch (e) {
+      console.error('Failed to write short book to localStorage', e);
+    }
+  }
+
   public createBackupSnapshot(): PharmacyBackupSnapshot {
     return {
       schemaVersion: '2.0',
@@ -1358,6 +1493,7 @@ export class PharmacySyncEngine {
       staffAccounts: staffAuth.getStaffList().map((u) => ({ ...u })),
       expenses: this.expenses.map((e) => ({ ...e })),
       auditSnapshots: this.auditSnapshots.map((a) => ({ ...a })),
+      shortBook: this.shortBook.map((sb) => ({ ...sb })),
     };
   }
 
@@ -1490,6 +1626,13 @@ export class PharmacySyncEngine {
       } catch {}
     }
 
+    if (Array.isArray(parsed.shortBook)) {
+      this.shortBook = (parsed.shortBook as ShortBookEntry[]).filter(
+        (sb) => sb && typeof sb.id === 'string' && typeof sb.itemName === 'string'
+      );
+      this.saveShortBook();
+    }
+
     // Clear stale outbox and notify all views
     this.outbox = [];
     this.saveOutbox();
@@ -1515,10 +1658,12 @@ export class PharmacySyncEngine {
     this.khataCustomers = [...INITIAL_KHATA_CUSTOMERS];
     this.expenses = [];
     this.auditSnapshots = [];
+    this.shortBook = [];
     this.saveMedicines();
     this.saveSales();
     this.saveOutbox();
     this.saveKhata();
+    this.saveShortBook();
     try {
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.pharmacyDetails));
       localStorage.setItem(COUNTERS_STORAGE_KEY, JSON.stringify(this.counters));
