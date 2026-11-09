@@ -23,7 +23,14 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { DosageForm, MedicineCategory, MedicineItem } from '../types/pharmacy';
-import { formatPKR, getPieceRetailPrice, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
+import {
+  formatPKR,
+  getDaysUntilExpiry,
+  getExpiryBadgeMeta,
+  getPieceRetailPrice,
+  isExpired,
+  isExpiringSoon,
+} from '../utils/pharmacyHelpers';
 import { formatDate } from '../utils/dates';
 import { 
   exportInventoryToExcel, 
@@ -35,6 +42,15 @@ import { soundService } from '../services/soundAlerts';
 import { syncEngine } from '../services/syncEngine';
 import { generatePurchaseOrderPDF } from '../services/pdfGenerator';
 
+export type InventoryStockFilter =
+  | 'all'
+  | 'low'
+  | 'expiring'
+  | 'exp_30'
+  | 'exp_60'
+  | 'exp_90'
+  | 'expired';
+
 interface SpreadsheetViewProps {
   medicines: MedicineItem[];
   onUpdateMedicine: (id: string, updates: Partial<MedicineItem>) => Promise<MedicineItem>;
@@ -43,6 +59,8 @@ interface SpreadsheetViewProps {
   onOpenScanner: () => void;
   onOpenPrintLabel: (med: MedicineItem) => void;
   canEdit: boolean;
+  externalStockFilter?: InventoryStockFilter | null;
+  onExternalFilterConsumed?: () => void;
 }
 
 export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
@@ -53,15 +71,24 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
   onOpenScanner,
   onOpenPrintLabel,
   canEdit,
+  externalStockFilter,
+  onExternalFilterConsumed,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedDosageForm, setSelectedDosageForm] = useState<string>('All');
-  const [stockFilter, setStockFilter] = useState<'all' | 'low' | 'expiring' | 'expired'>('all');
+  const [stockFilter, setStockFilter] = useState<InventoryStockFilter>('all');
   const [editingCell, setEditingCell] = useState<{ id: string; field: string } | null>(null);
   const [tempValue, setTempValue] = useState<string>('');
   const [isImporting, setIsImporting] = useState(false);
+
+  React.useEffect(() => {
+    if (externalStockFilter) {
+      setStockFilter(externalStockFilter);
+      onExternalFilterConsumed?.();
+    }
+  }, [externalStockFilter, onExternalFilterConsumed]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -130,9 +157,13 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
       // 3. Dosage Form
       if (selectedDosageForm !== 'All' && m.dosageForm !== selectedDosageForm) return false;
 
-      // 4. Stock alert state
+      // 4. Stock & Near-Expiry (30 / 60 / 90 days) alert state
+      const daysToExpiry = getDaysUntilExpiry(m.expiryDate);
       if (stockFilter === 'low' && m.currentStockPacks > m.minThresholdPacks) return false;
       if (stockFilter === 'expiring' && !isExpiringSoon(m.expiryDate, 90)) return false;
+      if (stockFilter === 'exp_30' && !(daysToExpiry > 0 && daysToExpiry <= 30)) return false;
+      if (stockFilter === 'exp_60' && !(daysToExpiry > 30 && daysToExpiry <= 60)) return false;
+      if (stockFilter === 'exp_90' && !(daysToExpiry > 60 && daysToExpiry <= 90)) return false;
       if (stockFilter === 'expired' && !isExpired(m.expiryDate)) return false;
 
       return true;
@@ -336,20 +367,29 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
           />
         </div>
 
-        {/* Quick Filter Badges */}
+        {/* Quick Filter Badges (including 30, 60, 90-Day Near Expiry Windows) */}
         <div className="flex items-center gap-1.5 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 text-xs">
           {[
             { id: 'all', label: 'All Status' },
             { id: 'low', label: 'Low Stock' },
-            { id: 'expiring', label: 'Expiring Soon' },
+            { id: 'expiring', label: 'All Near Expiry (≤90d)' },
+            { id: 'exp_30', label: '≤ 30 Days' },
+            { id: 'exp_60', label: '31–60 Days' },
+            { id: 'exp_90', label: '61–90 Days' },
             { id: 'expired', label: 'Expired' },
           ].map((f) => (
             <button
               key={f.id}
-              onClick={() => setStockFilter(f.id as any)}
-              className={`px-3 py-1.5 rounded-lg font-semibold whitespace-nowrap transition ${
+              onClick={() => setStockFilter(f.id as InventoryStockFilter)}
+              className={`px-2.5 py-1.5 rounded-lg font-semibold whitespace-nowrap transition cursor-pointer ${
                 stockFilter === f.id
-                  ? 'bg-slate-900 text-white'
+                  ? f.id === 'exp_30' || f.id === 'expired'
+                    ? 'bg-rose-600 text-white'
+                    : f.id === 'exp_60' || f.id === 'expiring'
+                    ? 'bg-amber-600 text-white'
+                    : f.id === 'exp_90'
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-slate-900 text-white'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
@@ -539,15 +579,45 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
                         {m.batchNumber}
                       </td>
 
-                      {/* Expiry Date */}
-                      <td className="py-2.5 px-3">
-                        <span
-                          className={`font-semibold ${
-                            isExp ? 'text-rose-600 font-bold' : isExpSoon ? 'text-amber-600' : 'text-slate-600'
-                          }`}
-                        >
-                          {m.expiryDate}
-                        </span>
+                      {/* Expiry Date (Inline Editable + 30/60/90-Day Badge) */}
+                      <td
+                        onClick={() => handleStartEdit(m.id, 'expiryDate', m.expiryDate)}
+                        className={`py-2.5 px-3 cursor-pointer ${
+                          editingCell?.id === m.id && editingCell?.field === 'expiryDate'
+                            ? 'bg-emerald-50'
+                            : ''
+                        }`}
+                        title="Click to edit Expiry Date (YYYY-MM-DD)"
+                      >
+                        {editingCell?.id === m.id && editingCell?.field === 'expiryDate' ? (
+                          <input
+                            type="date"
+                            value={tempValue}
+                            onChange={(e) => setTempValue(e.target.value)}
+                            onBlur={() => handleSaveEdit(m.id, 'expiryDate')}
+                            onKeyDown={(e) => handleKeyDown(e, m.id, 'expiryDate')}
+                            className="w-32 px-1.5 py-0.5 border border-emerald-500 rounded bg-white text-xs font-bold"
+                            autoFocus
+                          />
+                        ) : (
+                          (() => {
+                            const expMeta = getExpiryBadgeMeta(m.expiryDate);
+                            return (
+                              <div className="flex flex-col gap-0.5">
+                                <span className={expMeta.textClass}>
+                                  {m.expiryDate || 'Not set'}
+                                </span>
+                                {expMeta.window !== 'safe' && (
+                                  <span
+                                    className={`inline-block w-fit text-[9px] font-sans font-bold px-1.5 py-0.2 rounded ${expMeta.badgeClass}`}
+                                  >
+                                    {expMeta.horizonLabel} &bull; {expMeta.shortLabel}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()
+                        )}
                       </td>
 
                       {/* Shelf */}

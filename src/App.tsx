@@ -40,7 +40,7 @@ import { can, canOpenTab, defaultTabFor } from './utils/permissions';
 // Views & Components
 import { DashboardView } from './components/DashboardView';
 import { PosView } from './components/PosView';
-import { SpreadsheetView } from './components/SpreadsheetView';
+import { SpreadsheetView, InventoryStockFilter } from './components/SpreadsheetView';
 import { CriticalStockView } from './components/CriticalStockView';
 import { CreditKhataView } from './components/CreditKhataView';
 import { ReportsView } from './components/ReportsView';
@@ -74,6 +74,7 @@ export default function App() {
   const [sales, setSales] = useState<SaleTransaction[]>(syncEngine.getSales());
   const [khataCustomers, setKhataCustomers] = useState<CustomerKhata[]>(syncEngine.getKhataCustomers());
   const [alerts, setAlerts] = useState(syncEngine.getAlerts());
+  const [externalInventoryFilter, setExternalInventoryFilter] = useState<InventoryStockFilter | null>(null);
 
   // Modals
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -802,7 +803,25 @@ export default function App() {
 
               <NotificationDropdown
                 alerts={alerts}
-                onSelectAlert={() => setActiveTab('inventory')}
+                onSelectAlert={(alert) => {
+                  if (alert.type === 'expired') {
+                    setExternalInventoryFilter('expired');
+                    setActiveTab('inventory');
+                  } else if (alert.type === 'expiring_soon') {
+                    if (alert.expiryWindow === '30_days') {
+                      setExternalInventoryFilter('exp_30');
+                    } else if (alert.expiryWindow === '60_days') {
+                      setExternalInventoryFilter('exp_60');
+                    } else if (alert.expiryWindow === '90_days') {
+                      setExternalInventoryFilter('exp_90');
+                    } else {
+                      setExternalInventoryFilter('expiring');
+                    }
+                    setActiveTab('inventory');
+                  } else {
+                    setActiveTab('critical_stock');
+                  }
+                }}
               />
 
               <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700">
@@ -900,6 +919,8 @@ export default function App() {
                 setIsPrintLabelOpen(true);
               }}
               canEdit={currentUser.role === 'owner' || currentUser.role === 'pharmacist'}
+              externalStockFilter={externalInventoryFilter}
+              onExternalFilterConsumed={() => setExternalInventoryFilter(null)}
             />
           )}
 

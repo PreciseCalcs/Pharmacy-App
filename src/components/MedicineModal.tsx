@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Pill, Save, Sparkles, AlertCircle, Upload, Trash2, Image as ImageIcon, ShoppingBag, Heart } from 'lucide-react';
 import { DosageForm, MedicineCategory, MedicineItem, ProductDepartment } from '../types/pharmacy';
 import { soundService } from '../services/soundAlerts';
+import { getExpiryBadgeMeta } from '../utils/pharmacyHelpers';
 
 interface MedicineModalProps {
   isOpen: boolean;
@@ -565,15 +566,57 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Expiry Date (YYYY-MM-DD)</label>
+              <div className="sm:col-span-2">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-semibold text-slate-700">
+                    Expiry Date (YYYY-MM-DD) <span className="text-rose-500">*</span>
+                  </label>
+                  {formData.expiryDate && (
+                    <span
+                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        getExpiryBadgeMeta(formData.expiryDate).badgeClass
+                      }`}
+                    >
+                      {getExpiryBadgeMeta(formData.expiryDate).horizonLabel} (
+                      {getExpiryBadgeMeta(formData.expiryDate).shortLabel})
+                    </span>
+                  )}
+                </div>
                 <input
                   type="date"
                   required
                   value={formData.expiryDate || ''}
                   onChange={(e) => setFormData({ ...formData, expiryDate: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
+                <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                  <span className="text-[10px] text-slate-400 mr-1">Quick set:</span>
+                  {[
+                    { label: '+25d (≤30d)', days: 25 },
+                    { label: '+45d (≤60d)', days: 45 },
+                    { label: '+75d (≤90d)', days: 75 },
+                    { label: '+6 Months', days: 180 },
+                    { label: '+1 Year', days: 365 },
+                    { label: '+2 Years', days: 730 },
+                  ].map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() + preset.days);
+                        setFormData({
+                          ...formData,
+                          expiryDate: d.toISOString().slice(0, 10),
+                        });
+                        soundService.click();
+                      }}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 font-medium border border-slate-200 transition cursor-pointer"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div>

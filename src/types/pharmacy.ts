@@ -210,11 +210,17 @@ export interface SaleTransaction {
   createdAt: string;
 }
 
+export type ExpiryHorizon = 'expired' | '30_days' | '60_days' | '90_days';
+
 export interface StockAlert {
   id: string;
   medicineId: string;
   name: string;
   batchNumber: string;
+  expiryDate?: string;
+  expiryWindow?: ExpiryHorizon;
+  shelfLocation?: string;
+  atRiskValue?: number;
   type: 'expired' | 'expiring_soon' | 'out_of_stock' | 'low_stock';
   urgency: 'high' | 'medium' | 'low';
   message: string;

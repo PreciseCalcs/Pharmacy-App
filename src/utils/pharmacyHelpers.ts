@@ -65,7 +65,10 @@ export function formatPKRDecimal(amount: number): string {
 export function getDaysUntilExpiry(expiryDateStr: string): number {
   if (!expiryDateStr) return 999;
   const expiry = new Date(expiryDateStr);
+  if (isNaN(expiry.getTime())) return 999;
   const now = new Date();
+  expiry.setHours(0, 0, 0, 0);
+  now.setHours(0, 0, 0, 0);
   const diffTime = expiry.getTime() - now.getTime();
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 }
@@ -78,3 +81,76 @@ export function isExpiringSoon(expiryDateStr: string, thresholdDays = 90): boole
   const days = getDaysUntilExpiry(expiryDateStr);
   return days > 0 && days <= thresholdDays;
 }
+
+export function getExpiryWindow(
+  expiryDateStr: string
+): 'expired' | '30_days' | '60_days' | '90_days' | 'safe' {
+  const days = getDaysUntilExpiry(expiryDateStr);
+  if (days <= 0) return 'expired';
+  if (days <= 30) return '30_days';
+  if (days <= 60) return '60_days';
+  if (days <= 90) return '90_days';
+  return 'safe';
+}
+
+export function getExpiryBadgeMeta(expiryDateStr: string): {
+  window: 'expired' | '30_days' | '60_days' | '90_days' | 'safe';
+  days: number;
+  shortLabel: string;
+  horizonLabel: string;
+  badgeClass: string;
+  textClass: string;
+} {
+  const days = getDaysUntilExpiry(expiryDateStr);
+  const window = getExpiryWindow(expiryDateStr);
+
+  if (window === 'expired') {
+    return {
+      window,
+      days,
+      shortLabel: days === 0 ? 'Expires Today' : `Expired ${Math.abs(days)}d ago`,
+      horizonLabel: 'EXPIRED',
+      badgeClass: 'bg-rose-100 text-rose-800 border border-rose-300',
+      textClass: 'text-rose-600 font-bold',
+    };
+  }
+  if (window === '30_days') {
+    return {
+      window,
+      days,
+      shortLabel: `${days}d left`,
+      horizonLabel: '≤ 30 Days',
+      badgeClass: 'bg-rose-100 text-rose-800 border border-rose-200',
+      textClass: 'text-rose-600 font-bold',
+    };
+  }
+  if (window === '60_days') {
+    return {
+      window,
+      days,
+      shortLabel: `${days}d left`,
+      horizonLabel: '≤ 60 Days',
+      badgeClass: 'bg-amber-100 text-amber-800 border border-amber-200',
+      textClass: 'text-amber-600 font-semibold',
+    };
+  }
+  if (window === '90_days') {
+    return {
+      window,
+      days,
+      shortLabel: `${days}d left`,
+      horizonLabel: '≤ 90 Days',
+      badgeClass: 'bg-sky-100 text-sky-800 border border-sky-200',
+      textClass: 'text-sky-700 font-semibold',
+    };
+  }
+  return {
+    window,
+    days,
+    shortLabel: `${days}d`,
+    horizonLabel: 'Safe (>90d)',
+    badgeClass: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+    textClass: 'text-slate-600',
+  };
+}
+

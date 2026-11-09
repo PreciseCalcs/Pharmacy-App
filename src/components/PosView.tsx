@@ -35,6 +35,7 @@ import {
 } from '../types/pharmacy';
 import {
   formatPKR,
+  getExpiryBadgeMeta,
   getPieceRetailPrice,
   getPieceUnitName,
   getTotalPiecesInStock,
@@ -878,7 +879,24 @@ export const PosView: React.FC<PosViewProps> = ({
                       </div>
 
                       <div className="flex items-center justify-between text-[10px] text-slate-400 mt-2 pt-2 border-t border-slate-100 font-mono">
-                        <span className="truncate max-w-[120px]">{med.category}</span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="truncate max-w-[100px]">{med.category}</span>
+                          {med.expiryDate && (
+                            <span
+                              className={`text-[9px] px-1.5 py-0.2 rounded font-sans font-bold ${
+                                getExpiryBadgeMeta(med.expiryDate).window !== 'safe'
+                                  ? getExpiryBadgeMeta(med.expiryDate).badgeClass
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}
+                              title={`Batch ${med.batchNumber} · Expiry Date: ${med.expiryDate}`}
+                            >
+                              Exp: {med.expiryDate}
+                              {getExpiryBadgeMeta(med.expiryDate).window !== 'safe'
+                                ? ` (${getExpiryBadgeMeta(med.expiryDate).shortLabel})`
+                                : ''}
+                            </span>
+                          )}
+                        </div>
                         <span className={med.currentStockPacks <= med.minThresholdPacks ? 'text-amber-600 font-bold' : 'text-slate-600'}>
                           {med.currentStockPacks} packs ({med.currentStockLoose || 0} loose)
                         </span>

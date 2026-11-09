@@ -77,10 +77,33 @@ export class PharmacySyncEngine {
         const existingIds = new Set(parsed.map((m) => m.id));
         const missingNewItems = INITIAL_ZAHID_MEDICINES.filter((m) => !existingIds.has(m.id));
         this.medicines = missingNewItems.length > 0 ? [...parsed, ...missingNewItems] : parsed;
+
+        // Ensure sample items demonstrate 30, 60, and 90-day near-expiry windows
+        const expiryMigratedKey = 'zahid_expiry_30_60_90_v1';
+        if (!localStorage.getItem(expiryMigratedKey)) {
+          const seedMap = new Map(INITIAL_ZAHID_MEDICINES.map((m) => [m.id, m.expiryDate]));
+          const targetDemoIds = new Set([
+            'med_augmentin_625',
+            'med_flagyl_400',
+            'med_novidat_500',
+            'med_arinac_forte',
+            'gen_nestle_cerelac_wheat',
+            'med_gravinate_50',
+          ]);
+          this.medicines = this.medicines.map((m) => {
+            if (targetDemoIds.has(m.id) && seedMap.has(m.id)) {
+              return { ...m, expiryDate: seedMap.get(m.id)! };
+            }
+            return m;
+          });
+          localStorage.setItem(expiryMigratedKey, 'true');
+        }
+
         localStorage.setItem(INVENTORY_STORAGE_KEY, JSON.stringify(this.medicines));
       } else {
         this.medicines = [...INITIAL_ZAHID_MEDICINES];
         localStorage.setItem(INVENTORY_STORAGE_KEY, JSON.stringify(this.medicines));
+        localStorage.setItem('zahid_expiry_30_60_90_v1', 'true');
       }
 
       // 2. Load Sales
@@ -418,6 +441,10 @@ export class PharmacySyncEngine {
     this.medicines.forEach((m) => {
       const days = getDaysUntilExpiry(m.expiryDate);
       const totalPieces = getTotalPiecesInStock(m);
+      const atRiskValue = Math.round(
+        m.currentStockPacks * (m.unitCostPrice || 0) +
+          (m.currentStockLoose || 0) * (m.looseCostPrice || 0)
+      );
 
       if (isExpired(m.expiryDate)) {
         alerts.push({
@@ -425,22 +452,47 @@ export class PharmacySyncEngine {
           medicineId: m.id,
           name: m.name,
           batchNumber: m.batchNumber,
+          expiryDate: m.expiryDate,
+          expiryWindow: 'expired',
+          shelfLocation: m.shelfLocation,
+          atRiskValue,
           type: 'expired',
           urgency: 'high',
-          message: `${m.name} (Batch ${m.batchNumber}) EXPIRED on ${m.expiryDate}. Quarantine immediately!`,
+          message: `${m.name} (Batch ${m.batchNumber}) EXPIRED on ${m.expiryDate}. Quarantine & remove from shelf immediately!`,
           daysRemaining: days,
           currentStock: m.currentStockPacks,
           threshold: m.minThresholdPacks,
         });
       } else if (isExpiringSoon(m.expiryDate, 90)) {
+        const expiryWindow =
+          days <= 30 ? '30_days' : days <= 60 ? '60_days' : '90_days';
+        const urgency =
+          days <= 30 ? 'high' : days <= 60 ? 'medium' : 'low';
+        const windowLabel =
+          days <= 30
+            ? '30-Day Critical Window'
+            : days <= 60
+            ? '60-Day Warning Window'
+            : '90-Day Watch Window';
+        const actionAdvice =
+          days <= 30
+            ? 'Return to distributor or dispense immediately to prevent waste.'
+            : days <= 60
+            ? 'Prioritize FEFO counter dispensing first.'
+            : 'Monitor batch turnover closely.';
+
         alerts.push({
           id: `alert_exps_${m.id}`,
           medicineId: m.id,
           name: m.name,
           batchNumber: m.batchNumber,
+          expiryDate: m.expiryDate,
+          expiryWindow,
+          shelfLocation: m.shelfLocation,
+          atRiskValue,
           type: 'expiring_soon',
-          urgency: days <= 30 ? 'high' : 'medium',
-          message: `${m.name} expires in ${days} days (${m.expiryDate}). Prioritize dispensing.`,
+          urgency,
+          message: `[${windowLabel}] ${m.name} expires in ${days} days (${m.expiryDate}). ${actionAdvice}`,
           daysRemaining: days,
           currentStock: m.currentStockPacks,
           threshold: m.minThresholdPacks,
@@ -453,6 +505,8 @@ export class PharmacySyncEngine {
           medicineId: m.id,
           name: m.name,
           batchNumber: m.batchNumber,
+          expiryDate: m.expiryDate,
+          shelfLocation: m.shelfLocation,
           type: 'out_of_stock',
           urgency: 'high',
           message: `${m.name} is completely OUT OF STOCK. Reorder required.`,
@@ -465,6 +519,8 @@ export class PharmacySyncEngine {
           medicineId: m.id,
           name: m.name,
           batchNumber: m.batchNumber,
+          expiryDate: m.expiryDate,
+          shelfLocation: m.shelfLocation,
           type: 'low_stock',
           urgency: 'medium',
           message: `${m.name} has only ${m.currentStockPacks} packs left (Threshold: ${m.minThresholdPacks}).`,
@@ -476,7 +532,10 @@ export class PharmacySyncEngine {
 
     return alerts.sort((a, b) => {
       const urgencyRank = { high: 3, medium: 2, low: 1 };
-      return urgencyRank[b.urgency] - urgencyRank[a.urgency];
+      if (urgencyRank[b.urgency] !== urgencyRank[a.urgency]) {
+        return urgencyRank[b.urgency] - urgencyRank[a.urgency];
+      }
+      return (a.daysRemaining ?? 999) - (b.daysRemaining ?? 999);
     });
   }
 

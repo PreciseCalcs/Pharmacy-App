@@ -1,5 +1,11 @@
 import { MedicineItem, MedicineRecord } from '../types/pharmacy';
 
+function daysFromToday(offsetDays: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
 export const INITIAL_ZAHID_MEDICINES: MedicineItem[] = [
   {
     id: 'med_panadol_500',
@@ -44,7 +50,7 @@ export const INITIAL_ZAHID_MEDICINES: MedicineItem[] = [
     currentStockLoose: 4,
     minThresholdPacks: 8,
     batchNumber: 'B-9912',
-    expiryDate: '2026-11-20',
+    expiryDate: daysFromToday(14),
     shelfLocation: 'Rack B-02',
     manufacturer: 'GSK Pakistan',
     requiresPrescription: true,
@@ -94,7 +100,7 @@ export const INITIAL_ZAHID_MEDICINES: MedicineItem[] = [
     currentStockLoose: 45,
     minThresholdPacks: 5,
     batchNumber: 'SAN-881',
-    expiryDate: '2027-09-30',
+    expiryDate: daysFromToday(26),
     shelfLocation: 'Rack A-04',
     manufacturer: 'Sanofi-Aventis',
     requiresPrescription: true,
@@ -118,7 +124,7 @@ export const INITIAL_ZAHID_MEDICINES: MedicineItem[] = [
     currentStockLoose: 20,
     minThresholdPacks: 6,
     batchNumber: 'ABB-650',
-    expiryDate: '2027-04-18',
+    expiryDate: daysFromToday(54),
     shelfLocation: 'Rack C-01',
     manufacturer: 'Abbott Laboratories',
     requiresPrescription: false,
@@ -192,7 +198,7 @@ export const INITIAL_ZAHID_MEDICINES: MedicineItem[] = [
     currentStockLoose: 3,
     minThresholdPacks: 5,
     batchNumber: 'SMI-108',
-    expiryDate: '2026-12-05',
+    expiryDate: daysFromToday(42),
     shelfLocation: 'Rack B-01',
     manufacturer: 'Sami Pharmaceuticals',
     requiresPrescription: true,
@@ -216,7 +222,7 @@ export const INITIAL_ZAHID_MEDICINES: MedicineItem[] = [
     currentStockLoose: 35,
     minThresholdPacks: 5,
     batchNumber: 'SRL-552',
-    expiryDate: '2027-06-30',
+    expiryDate: daysFromToday(82),
     shelfLocation: 'Rack C-02',
     manufacturer: 'Searle Company',
     requiresPrescription: false,
@@ -472,7 +478,7 @@ export const INITIAL_ZAHID_MEDICINES: MedicineItem[] = [
     currentStockLoose: 0,
     minThresholdPacks: 6,
     batchNumber: 'CRL-602',
-    expiryDate: '2026-12-15',
+    expiryDate: daysFromToday(71),
     shelfLocation: 'Baby Aisle R-2',
     manufacturer: 'Nestle Pakistan',
     requiresPrescription: false,
