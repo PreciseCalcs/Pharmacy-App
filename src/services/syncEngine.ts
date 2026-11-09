@@ -773,6 +773,7 @@ export class PharmacySyncEngine {
     staffRole: any;
     paymentMethod: any;
     discountPercent: number;
+    discountAmount?: number;
     receivedAmount: number;
     notes?: string;
   }): Promise<SaleTransaction> {
@@ -786,6 +787,7 @@ export class PharmacySyncEngine {
       staffRole,
       paymentMethod,
       discountPercent,
+      discountAmount: explicitDiscountAmount,
       receivedAmount,
       notes,
     } = transactionData;
@@ -825,7 +827,16 @@ export class PharmacySyncEngine {
     }
 
     const subtotal = Number(items.reduce((sum, item) => sum + item.subtotal, 0).toFixed(2));
-    const discountAmount = Math.round((subtotal * (discountPercent || 0)) / 100);
+    const discountAmount =
+      explicitDiscountAmount !== undefined && explicitDiscountAmount >= 0
+        ? Math.min(subtotal, Math.round(Number(explicitDiscountAmount) || 0))
+        : Math.min(subtotal, Math.round((subtotal * (discountPercent || 0)) / 100));
+    const effectiveDiscountPercent =
+      subtotal > 0
+        ? explicitDiscountAmount !== undefined && explicitDiscountAmount >= 0
+          ? Number(((discountAmount / subtotal) * 100).toFixed(1))
+          : discountPercent || 0
+        : 0;
     const totalAmount = Math.max(0, subtotal - discountAmount);
     const totalProfit = Number(
       (items.reduce((sum, item) => sum + item.profit, 0) - discountAmount).toFixed(2)
@@ -847,7 +858,7 @@ export class PharmacySyncEngine {
       paymentMethod,
       items,
       subtotal,
-      discountPercent: discountPercent || 0,
+      discountPercent: effectiveDiscountPercent,
       discountAmount,
       totalAmount,
       totalProfit,

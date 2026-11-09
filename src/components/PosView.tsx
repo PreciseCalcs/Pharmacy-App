@@ -71,6 +71,7 @@ interface PosViewProps {
     staffRole: any;
     paymentMethod: PaymentMethod;
     discountPercent: number;
+    discountAmount?: number;
     receivedAmount: number;
     notes?: string;
   }) => Promise<SaleTransaction>;
@@ -103,6 +104,8 @@ export const PosView: React.FC<PosViewProps> = ({
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
   const [discountPercent, setDiscountPercent] = useState<number>(0);
+  const [discountMode, setDiscountMode] = useState<'percent' | 'pkr'>('percent');
+  const [customDiscountPkr, setCustomDiscountPkr] = useState<string>('');
   const [receivedAmount, setReceivedAmount] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
@@ -575,11 +578,20 @@ export const PosView: React.FC<PosViewProps> = ({
     soundService.click();
   };
 
-  // Financial calculations
+  // Financial calculations (supports both Percentage % and Custom PKR Rs. discount)
   const subtotal = Number(
     cart.reduce((sum, item) => sum + item.subtotal, 0).toFixed(2)
   );
-  const discountAmount = Math.round((subtotal * discountPercent) / 100);
+  const discountAmount =
+    discountMode === 'pkr'
+      ? Math.min(subtotal, Math.max(0, Math.round(parseFloat(customDiscountPkr) || 0)))
+      : Math.min(subtotal, Math.round((subtotal * discountPercent) / 100));
+  const effectiveDiscountPercent =
+    subtotal > 0
+      ? discountMode === 'pkr'
+        ? Number(((discountAmount / subtotal) * 100).toFixed(1))
+        : discountPercent
+      : 0;
   const netTotal = Math.max(0, subtotal - discountAmount);
 
   const numReceived = parseFloat(receivedAmount) || netTotal;
@@ -613,13 +625,16 @@ export const PosView: React.FC<PosViewProps> = ({
         staffName: currentUser.name,
         staffRole: currentUser.role,
         paymentMethod,
-        discountPercent,
+        discountPercent: effectiveDiscountPercent,
+        discountAmount,
         receivedAmount: numReceived,
       });
 
       setCart([]);
       setReceivedAmount('');
       setDiscountPercent(0);
+      setCustomDiscountPkr('');
+      setDiscountMode('percent');
       onSaleCompleted(txn);
     } catch (err: any) {
       soundService.errorTone();
@@ -1537,29 +1552,126 @@ export const PosView: React.FC<PosViewProps> = ({
               </div>
             )}
 
-            {/* Discount Quick Select */}
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="font-semibold text-slate-700">Special Discount</label>
+            {/* Discount (% Presets + Custom % + Custom PKR Rs.) */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="font-semibold text-slate-700 flex items-center gap-1">
+                  <Percent className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>Discount (% or Custom PKR)</span>
+                </label>
                 <span className="font-mono text-emerald-700 font-bold">
-                  {discountPercent > 0 ? `-${discountPercent}% (Rs. ${discountAmount})` : 'None'}
+                  {discountAmount > 0
+                    ? `-Rs. ${discountAmount} (${effectiveDiscountPercent}%)`
+                    : 'None'}
                 </span>
               </div>
+
+              {/* Quick Percentage Buttons */}
               <div className="flex gap-1.5">
-                {[0, 5, 7.5, 10, 15].map((pct) => (
-                  <button
-                    key={pct}
-                    type="button"
-                    onClick={() => setDiscountPercent(pct)}
-                    className={`flex-1 py-1 rounded-md border text-[11px] font-semibold transition ${
-                      discountPercent === pct
-                        ? 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    {pct === 0 ? '0%' : `${pct}%`}
-                  </button>
-                ))}
+                {[0, 5, 7.5, 10, 15].map((pct) => {
+                  const isSelected = discountMode === 'percent' && discountPercent === pct;
+                  return (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() => {
+                        setDiscountMode('percent');
+                        setDiscountPercent(pct);
+                        if (pct === 0) {
+                          setCustomDiscountPkr('');
+                        } else if (subtotal > 0) {
+                          setCustomDiscountPkr(String(Math.round((subtotal * pct) / 100)));
+                        }
+                      }}
+                      className={`flex-1 py-1 rounded-md border text-[11px] font-semibold transition cursor-pointer ${
+                        isSelected
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      {pct === 0 ? '0%' : `${pct}%`}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Custom PKR (Rs.) Input & Custom % Input */}
+              <div className="grid grid-cols-2 gap-2">
+                <div
+                  className={`flex items-center rounded-lg border px-2.5 py-1.5 transition ${
+                    discountMode === 'pkr' && discountAmount > 0
+                      ? 'border-emerald-600 bg-emerald-50/50 ring-1 ring-emerald-500'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  <span className="text-[11px] font-bold text-emerald-800 mr-1.5 shrink-0">
+                    Rs.
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={subtotal > 0 ? subtotal : undefined}
+                    step="1"
+                    placeholder="Custom PKR off"
+                    value={
+                      discountMode === 'pkr'
+                        ? customDiscountPkr
+                        : discountAmount > 0
+                        ? String(discountAmount)
+                        : ''
+                    }
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setDiscountMode('pkr');
+                      setCustomDiscountPkr(val);
+                      const num = Math.max(0, parseFloat(val) || 0);
+                      if (subtotal > 0) {
+                        setDiscountPercent(
+                          Number(
+                            ((Math.min(subtotal, num) / subtotal) * 100).toFixed(1)
+                          )
+                        );
+                      } else {
+                        setDiscountPercent(0);
+                      }
+                    }}
+                    className="w-full text-xs font-mono font-bold text-slate-900 bg-transparent focus:outline-none"
+                  />
+                </div>
+
+                <div
+                  className={`flex items-center rounded-lg border px-2.5 py-1.5 transition ${
+                    discountMode === 'percent' && discountPercent > 0
+                      ? 'border-emerald-600 bg-emerald-50/50 ring-1 ring-emerald-500'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step="0.5"
+                    placeholder="Custom %"
+                    value={discountPercent > 0 ? discountPercent : ''}
+                    onChange={(e) => {
+                      const pct = Math.min(
+                        100,
+                        Math.max(0, parseFloat(e.target.value) || 0)
+                      );
+                      setDiscountMode('percent');
+                      setDiscountPercent(pct);
+                      if (subtotal > 0 && pct > 0) {
+                        setCustomDiscountPkr(String(Math.round((subtotal * pct) / 100)));
+                      } else {
+                        setCustomDiscountPkr('');
+                      }
+                    }}
+                    className="w-full text-xs font-mono font-bold text-slate-900 bg-transparent focus:outline-none"
+                  />
+                  <span className="text-[11px] font-bold text-slate-500 ml-1 shrink-0">
+                    %
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -1571,7 +1683,9 @@ export const PosView: React.FC<PosViewProps> = ({
               </div>
               {discountAmount > 0 && (
                 <div className="flex justify-between text-emerald-700 font-semibold">
-                  <span>Discount Applied</span>
+                  <span>
+                    Discount Applied ({effectiveDiscountPercent}%)
+                  </span>
                   <span className="font-mono">-Rs. {discountAmount}</span>
                 </div>
               )}
