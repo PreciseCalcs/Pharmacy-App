@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { X, Pill, Save, Sparkles, AlertCircle } from 'lucide-react';
-import { DosageForm, MedicineCategory, MedicineItem } from '../types/pharmacy';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Pill, Save, Sparkles, AlertCircle, Upload, Trash2, Image as ImageIcon, ShoppingBag, Heart } from 'lucide-react';
+import { DosageForm, MedicineCategory, MedicineItem, ProductDepartment } from '../types/pharmacy';
 import { soundService } from '../services/soundAlerts';
 
 interface MedicineModalProps {
@@ -24,6 +24,12 @@ const CATEGORIES: MedicineCategory[] = [
   'Gynecology',
   'Ophthalmology',
   'ENT',
+  'Personal Care & Sexual Wellness',
+  'Feminine Hygiene & Care',
+  'Baby & Mother Care',
+  'Personal Hygiene & Grooming',
+  'General Store & FMCG',
+  'Medical Devices & Surgical',
   'General / Other',
 ];
 
@@ -40,6 +46,13 @@ const DOSAGE_FORMS: DosageForm[] = [
   'Sachet',
   'Patch',
   'Infusion',
+  'Pack',
+  'Piece',
+  'Bottle',
+  'Tube',
+  'Box',
+  'Roll',
+  'Kit',
   'Other',
 ];
 
@@ -55,6 +68,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
     barcode: '',
     sku: '',
     category: 'Analgesics & Pain',
+    department: 'pharmacy',
     dosageForm: 'Tablet',
     strength: '500mg',
     unitsPerPack: 10,
@@ -72,10 +86,13 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
     requiresPrescription: false,
     supplier: '',
     notes: '',
+    imageUrl: '',
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [imageError, setImageError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (medicine) {
@@ -89,6 +106,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
         barcode: randomCode,
         sku: `MED-${Date.now().toString().slice(-6)}`,
         category: 'Analgesics & Pain',
+        department: 'pharmacy',
         dosageForm: 'Tablet',
         strength: '500mg',
         unitsPerPack: 20,
@@ -106,9 +124,50 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
         requiresPrescription: false,
         supplier: 'Multan Distributors',
         notes: '',
+        imageUrl: '',
       });
     }
   }, [medicine, isOpen]);
+
+  // Handle product photo upload as base64
+  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setImageError('');
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setImageError('Please select a valid image file (JPG, PNG, WEBP, SVG)');
+      return;
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      setImageError('Image must be under 2MB in size');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      const base64 = loadEvent.target?.result as string;
+      setFormData((prev) => ({ ...prev, imageUrl: base64 }));
+      soundService.click();
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Auto-set department when category changes
+  const handleCategoryChange = (category: MedicineCategory) => {
+    let dept: ProductDepartment = 'pharmacy';
+    if (category === 'Personal Care & Sexual Wellness' || category === 'Feminine Hygiene & Care' || category === 'Personal Hygiene & Grooming') {
+      dept = 'personal_care';
+    } else if (category === 'Baby & Mother Care') {
+      dept = 'mother_baby';
+    } else if (category === 'General Store & FMCG') {
+      dept = 'general_store';
+    } else if (category === 'Medical Devices & Surgical') {
+      dept = 'surgical';
+    }
+    setFormData((prev) => ({ ...prev, category, department: dept }));
+  };
 
   // Recalculate loose prices when pack price or units per pack changes
   const handlePackPriceChange = (cost: number, retail: number, units: number) => {
@@ -180,34 +239,116 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
             </div>
           )}
 
+          {/* Product Image & Department Card */}
+          <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row items-center gap-4">
+            <div className="relative group shrink-0">
+              <div className="w-20 h-20 rounded-xl border-2 border-dashed border-slate-300 bg-white overflow-hidden flex items-center justify-center shadow-2xs">
+                {formData.imageUrl ? (
+                  <img
+                    src={formData.imageUrl}
+                    alt="Product preview"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="text-center p-2 text-slate-400">
+                    <ImageIcon className="w-6 h-6 mx-auto mb-1 text-slate-300" />
+                    <span className="text-[10px] leading-tight block">No Photo</span>
+                  </div>
+                )}
+              </div>
+              {formData.imageUrl && (
+                <button
+                  type="button"
+                  onClick={() => setFormData((prev) => ({ ...prev, imageUrl: '' }))}
+                  className="absolute -top-1.5 -right-1.5 bg-rose-500 hover:bg-rose-600 text-white rounded-full p-1 shadow-xs"
+                  title="Remove image"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            <div className="flex-1 w-full space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h4 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <Upload className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Product Image (Medicines & General Store Items)</span>
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    Upload photo of medicine pack, condoms, personal care, baby products, or FMCG item.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageFileChange}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 shadow-2xs"
+                  >
+                    <Upload className="w-3 h-3 text-slate-500" />
+                    <span>Upload photo</span>
+                  </button>
+                </div>
+              </div>
+
+              {imageError && (
+                <p className="text-[11px] text-rose-600">{imageError}</p>
+              )}
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Or paste image URL (https://...)"
+                  value={formData.imageUrl || ''}
+                  onChange={(e) => setFormData({ ...formData, imageUrl: e.target.value })}
+                  className="w-full px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-[11px] text-slate-600 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+          </div>
+
           {/* Section: Clinical & Brand Details */}
           <div>
-            <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider mb-2 text-emerald-800">
-              1. Brand & Formulation
-            </h4>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider text-emerald-800">
+                1. Item Classification & Brand
+              </h4>
+              <span className="text-[10px] text-slate-500 font-medium">
+                Supports Medicines, Condoms, Baby items & General FMCG
+              </span>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  Brand Name <span className="text-rose-500">*</span>
+                  Product / Brand Name <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Panadol Extra"
+                  placeholder="e.g. Durex Extra Safe / Panadol 500mg"
                   value={formData.name || ''}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
                 />
               </div>
 
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  Generic Formula <span className="text-rose-500">*</span>
+                  Generic Formula / Description <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Paracetamol + Caffeine"
+                  placeholder="e.g. Natural Rubber Latex / Paracetamol"
                   value={formData.genericName || ''}
                   onChange={(e) => setFormData({ ...formData, genericName: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
@@ -215,10 +356,10 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Strength / Potency</label>
+                <label className="block font-semibold text-slate-700 mb-1">Strength / Spec / Size</label>
                 <input
                   type="text"
-                  placeholder="e.g. 500mg, 10mg/5ml"
+                  placeholder="e.g. 500mg, 3s Pack, 250ml, Large"
                   value={formData.strength || ''}
                   onChange={(e) => setFormData({ ...formData, strength: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
@@ -226,22 +367,41 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Therapeutic Category</label>
+                <label className="block font-semibold text-slate-700 mb-1">Product Category</label>
                 <select
                   value={formData.category}
-                  onChange={(e) => setFormData({ ...formData, category: e.target.value as MedicineCategory })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  onChange={(e) => handleCategoryChange(e.target.value as MedicineCategory)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
                 >
-                  {CATEGORIES.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
+                  <optgroup label="General Store & Personal Items">
+                    <option value="Personal Care & Sexual Wellness">Personal Care & Sexual Wellness (Condoms, Lube, Tests)</option>
+                    <option value="Feminine Hygiene & Care">Feminine Hygiene & Care (Sanitary Pads)</option>
+                    <option value="Baby & Mother Care">Baby & Mother Care (Diapers, Formula Milk)</option>
+                    <option value="Personal Hygiene & Grooming">Personal Hygiene & Grooming (Razors, Soaps)</option>
+                    <option value="General Store & FMCG">General Store & FMCG (Shampoos, Drinks, First Aid)</option>
+                    <option value="Medical Devices & Surgical">Medical Devices & Surgical (Strips, BP, Syringes)</option>
+                  </optgroup>
+                  <optgroup label="Clinical Pharmacy Medicines">
+                    <option value="Analgesics & Pain">Analgesics & Pain</option>
+                    <option value="Antibiotics">Antibiotics</option>
+                    <option value="Gastrointestinal">Gastrointestinal</option>
+                    <option value="Respiratory">Respiratory</option>
+                    <option value="Cardiovascular">Cardiovascular</option>
+                    <option value="Anti-Diabetic">Anti-Diabetic</option>
+                    <option value="Vitamins & Supplements">Vitamins & Supplements</option>
+                    <option value="Dermatology">Dermatology</option>
+                    <option value="Pediatric">Pediatric</option>
+                    <option value="Gynecology">Gynecology</option>
+                    <option value="ENT">ENT</option>
+                    <option value="Ophthalmology">Ophthalmology</option>
+                    <option value="Psychiatric & Neuro">Psychiatric & Neuro</option>
+                    <option value="General / Other">General / Other</option>
+                  </optgroup>
                 </select>
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Dosage Form</label>
+                <label className="block font-semibold text-slate-700 mb-1">Unit / Packaging Form</label>
                 <select
                   value={formData.dosageForm}
                   onChange={(e) => setFormData({ ...formData, dosageForm: e.target.value as DosageForm })}
@@ -256,10 +416,10 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Manufacturer</label>
+                <label className="block font-semibold text-slate-700 mb-1">Manufacturer / Brand Owner</label>
                 <input
                   type="text"
-                  placeholder="e.g. GSK, Abbott, Getz"
+                  placeholder="e.g. Reckitt, P&G, GSK, Nestle"
                   value={formData.manufacturer || ''}
                   onChange={(e) => setFormData({ ...formData, manufacturer: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500"
