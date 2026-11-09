@@ -1,5 +1,11 @@
 import jsPDF from 'jspdf';
-import { MedicineItem, SaleTransaction, ShortBookEntry, ZAHID_PHARMACY_DETAILS } from '../types/pharmacy';
+import {
+  MedicineItem,
+  SaleTransaction,
+  ShortBookEntry,
+  SupplierAccount,
+  ZAHID_PHARMACY_DETAILS,
+} from '../types/pharmacy';
 import { formatDateTime } from '../utils/dates';
 import { formatPKR, getPieceRetailPrice } from '../utils/pharmacyHelpers';
 import { syncEngine } from './syncEngine';
@@ -647,5 +653,116 @@ export function generateShortBookPDF(entries?: ShortBookEntry[]): void {
   const safeSlug = details.name.replace(/[^a-zA-Z0-9]+/g, '_');
   doc.save(`${safeSlug}_Short_Book_Demand_${new Date().toISOString().slice(0, 10)}.pdf`);
 }
+
+export function generateSupplierStatementPDF(supplier: SupplierAccount): void {
+  const details = syncEngine.getPharmacyDetails() || ZAHID_PHARMACY_DETAILS;
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  let y = 16;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.text(details.name, pageWidth / 2, y, { align: 'center' });
+
+  y += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text(`${details.address}, ${details.city}`, pageWidth / 2, y, { align: 'center' });
+
+  y += 5;
+  doc.setFontSize(9);
+  doc.text(
+    `Drug Licence: ${details.drugLicenceNumber} | Phone: ${details.phone}`,
+    pageWidth / 2,
+    y,
+    { align: 'center' }
+  );
+
+  y += 6;
+  doc.setLineWidth(0.5);
+  doc.line(14, y, pageWidth - 14, y);
+
+  y += 8;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13.5);
+  doc.text(`SUPPLIER KHATA & GRN STATEMENT: ${supplier.distributorName}`, 14, y);
+
+  y += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(
+    `Order Booker: ${supplier.orderBookerName} (${supplier.orderBookerPhone}) | Visit Day: ${supplier.visitDay}`,
+    14,
+    y
+  );
+
+  y += 6;
+  doc.setFillColor(240, 253, 244);
+  doc.rect(14, y, pageWidth - 28, 14, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text(`Total Purchased: ${formatPKR(supplier.totalPurchasedAmount)}`, 18, y + 6);
+  doc.text(`Total Paid: ${formatPKR(supplier.totalPaidAmount)}`, 78, y + 6);
+  doc.text(`Balance Payable: ${formatPKR(supplier.balancePayable)}`, 135, y + 6);
+  doc.text(
+    `Trade Bonus Savings (Free Packs Value): ${formatPKR(supplier.totalBonusValueSaved || 0)}`,
+    18,
+    y + 11.5
+  );
+
+  y += 20;
+  doc.setFillColor(229, 231, 235);
+  doc.rect(14, y, pageWidth - 28, 7, 'F');
+  doc.setFontSize(8);
+  doc.text('Date', 16, y + 5);
+  doc.text('Type / Ref #', 46, y + 5);
+  doc.text('Description & Bonus Scheme', 84, y + 5);
+  doc.text('Billed (PKR)', 156, y + 5, { align: 'right' });
+  doc.text('Paid (PKR)', pageWidth - 16, y + 5, { align: 'right' });
+
+  y += 10;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+
+  supplier.ledger.forEach((entry) => {
+    if (y > 268) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.text(formatDateTime(entry.date).slice(0, 16), 16, y);
+    doc.setFont('helvetica', 'bold');
+    doc.text(
+      (entry.supplierInvoiceNumber || entry.grnNumber || entry.type.toUpperCase()).slice(0, 18),
+      46,
+      y
+    );
+    doc.setFont('helvetica', 'normal');
+    doc.text(entry.description.slice(0, 38), 84, y);
+    doc.text(
+      entry.totalBilledAmount > 0 ? formatPKR(entry.totalBilledAmount) : '-',
+      156,
+      y,
+      { align: 'right' }
+    );
+    doc.setFont('helvetica', 'bold');
+    doc.text(
+      entry.paidAmount > 0 ? formatPKR(entry.paidAmount) : '-',
+      pageWidth - 16,
+      y,
+      { align: 'right' }
+    );
+    doc.setFont('helvetica', 'normal');
+    y += 6;
+  });
+
+  const safeSup = supplier.distributorName.replace(/[^a-zA-Z0-9]+/g, '_');
+  doc.save(`${safeSup}_Khata_Statement_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
 
 

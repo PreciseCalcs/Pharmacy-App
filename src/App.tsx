@@ -20,7 +20,8 @@ import {
   Keyboard,
   HelpCircle,
   ShieldAlert,
-  Wallet
+  Wallet,
+  Truck
 } from 'lucide-react';
 import { 
   ConnectionStatus, 
@@ -28,7 +29,8 @@ import {
   PharmacyDetails, 
   SaleTransaction, 
   UserAccount, 
-  CustomerKhata 
+  CustomerKhata,
+  SupplierAccount
 } from './types/pharmacy';
 import { syncEngine } from './services/syncEngine';
 import { staffAuth } from './services/staffAuth';
@@ -43,6 +45,7 @@ import { PosView } from './components/PosView';
 import { SpreadsheetView, InventoryStockFilter } from './components/SpreadsheetView';
 import { CriticalStockView } from './components/CriticalStockView';
 import { CreditKhataView } from './components/CreditKhataView';
+import { SupplierKhataView } from './components/SupplierKhataView';
 import { ReportsView } from './components/ReportsView';
 import { AuditView } from './components/AuditView';
 import { SettingsView } from './components/SettingsView';
@@ -73,6 +76,7 @@ export default function App() {
   const [medicines, setMedicines] = useState<MedicineItem[]>(syncEngine.getMedicines());
   const [sales, setSales] = useState<SaleTransaction[]>(syncEngine.getSales());
   const [khataCustomers, setKhataCustomers] = useState<CustomerKhata[]>(syncEngine.getKhataCustomers());
+  const [supplierAccounts, setSupplierAccounts] = useState<SupplierAccount[]>(syncEngine.getSupplierAccounts());
   const [alerts, setAlerts] = useState(syncEngine.getAlerts());
   const [externalInventoryFilter, setExternalInventoryFilter] = useState<InventoryStockFilter | null>(null);
   const [initialReportSection, setInitialReportSection] = useState<'invoices' | 'products' | null>(null);
@@ -153,6 +157,7 @@ export default function App() {
       setMedicines(syncEngine.getMedicines());
       setSales(syncEngine.getSales());
       setKhataCustomers(syncEngine.getKhataCustomers());
+      setSupplierAccounts(syncEngine.getSupplierAccounts());
       setAlerts(syncEngine.getAlerts());
       setPharmacyDetails(syncEngine.getPharmacyDetails());
       setCounters(syncEngine.getCounters());
@@ -244,6 +249,11 @@ export default function App() {
           setIsMobileMenuOpen(false);
           soundService.click();
           showToast('⚡ Credit Khata Accounts (Ctrl+K)', 'success');
+          return;
+        }
+        if (key === 'd') {
+          e.preventDefault();
+          handleNavigateTab('suppliers', '⚡ Supplier & GRN Ledger (Ctrl+D)');
           return;
         }
         if (key === 'r') {
@@ -394,6 +404,7 @@ export default function App() {
   };
 
   const khataActiveCount = syncEngine.getKhataAccountsWithBalanceCount();
+  const suppliersPayableCount = syncEngine.getSuppliersWithPayableCount();
   const criticalStockCount = useMemo(() => {
     return medicines.filter((m) => m.currentStockPacks <= (m.minThresholdPacks || 5)).length;
   }, [medicines]);
@@ -410,6 +421,8 @@ export default function App() {
         return 'Critical Stock Alerts';
       case 'khata':
         return 'Credit khata';
+      case 'suppliers':
+        return 'Supplier & GRN khata';
       case 'reports':
         return 'Sales reports';
       case 'audit':
@@ -645,6 +658,35 @@ export default function App() {
                     </kbd>
                   </div>
                 </button>
+
+                {(currentUser.role === 'owner' || currentUser.role === 'pharmacist') && (
+                  <button
+                    onClick={() => {
+                      handleNavigateTab('suppliers');
+                    }}
+                    className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                      activeTab === 'suppliers'
+                        ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
+                        : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
+                    }`}
+                    title="Supplier / Distributor Khata & GRN Invoices (Ctrl+D)"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Truck className="w-4 h-4 text-emerald-400" />
+                      <span>Supplier &amp; GRN khata</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {suppliersPayableCount > 0 && (
+                        <span className="bg-rose-500 text-white text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center">
+                          {suppliersPayableCount}
+                        </span>
+                      )}
+                      <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                        ^D
+                      </kbd>
+                    </div>
+                  </button>
+                )}
 
                 <button
                   onClick={() => {
@@ -946,6 +988,18 @@ export default function App() {
               customers={khataCustomers}
               onCustomerUpdated={() => {
                 setKhataCustomers(syncEngine.getKhataCustomers());
+              }}
+            />
+          )}
+
+          {activeTab === 'suppliers' && (
+            <SupplierKhataView
+              suppliers={supplierAccounts}
+              medicines={medicines}
+              canEdit={currentUser.role === 'owner' || currentUser.role === 'pharmacist'}
+              onSupplierUpdated={() => {
+                setSupplierAccounts(syncEngine.getSupplierAccounts());
+                setMedicines(syncEngine.getMedicines());
               }}
             />
           )}

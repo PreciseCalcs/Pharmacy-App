@@ -476,4 +476,259 @@ export interface ShortBookEntry {
   orderedAt?: string;
 }
 
+export type SupplierPaymentMethod =
+  | 'Cash'
+  | 'Bank Transfer'
+  | 'EasyPaisa'
+  | 'JazzCash'
+  | 'Cheque'
+  | 'Credit';
+
+export interface GRNLineItem {
+  medicineId: string;
+  medicineName: string;
+  strength?: string;
+  batchNumber: string;
+  expiryDate: string;
+  billedPacks: number; // Packs charged on distributor invoice
+  bonusPacks: number; // Free trade scheme packs (e.g., +1 in a 10+1 scheme)
+  totalPacksReceived: number; // billedPacks + bonusPacks added to inventory
+  invoiceTradeRatePerPack: number; // Trade price per billed pack (PKR)
+  tradeDiscountPercent: number; // Extra trade discount %
+  lineNetTotal: number; // Total payable for this line (PKR)
+  effectiveCostPerPack: number; // True unit cost after trade bonus = lineNetTotal / totalPacksReceived
+  newRetailMRPPerPack?: number; // Optional updated retail MRP per pack
+}
+
+export interface SupplierLedgerEntry {
+  id: string;
+  type: 'grn_invoice' | 'payment' | 'purchase_return';
+  grnNumber?: string;
+  supplierInvoiceNumber?: string;
+  date: string;
+  description: string;
+  totalBilledAmount: number; // Payable amount added by this GRN
+  paidAmount: number; // Amount paid immediately or via partial payment
+  paymentMethod?: SupplierPaymentMethod;
+  orderBookerName?: string;
+  items?: GRNLineItem[];
+  totalBonusPacks?: number;
+  totalBonusSavingsValue?: number;
+  note?: string;
+}
+
+export interface SupplierAccount {
+  id: string;
+  distributorName: string;
+  companyBrands: string;
+  orderBookerName: string;
+  orderBookerPhone: string;
+  visitDay: string;
+  address?: string;
+  ntnOrLicence?: string;
+  balancePayable: number; // >0 means pharmacy owes distributor
+  totalPurchasedAmount: number;
+  totalPaidAmount: number;
+  totalBonusValueSaved: number; // Cumulative PKR saved via 10+1 / 12+2 bonus schemes
+  ledger: SupplierLedgerEntry[];
+  updatedAt: string;
+  createdAt: string;
+}
+
+export const INITIAL_SUPPLIER_ACCOUNTS: SupplierAccount[] = [
+  {
+    id: 'sup_multan_pharma_01',
+    distributorName: 'Multan Pharma Distributors',
+    companyBrands: 'GSK Pakistan, Sanofi-Aventis, Haleon',
+    orderBookerName: 'Tariq Mehmood (Medical Rep)',
+    orderBookerPhone: '0300 631 4420',
+    visitDay: 'Monday & Thursday',
+    address: 'Nishtar Road Pharma Market, Multan',
+    ntnOrLicence: 'DL-361-MPD-882',
+    balancePayable: 8400,
+    totalPurchasedAmount: 18400,
+    totalPaidAmount: 10000,
+    totalBonusValueSaved: 1560,
+    updatedAt: '2026-11-08T14:30:00.000Z',
+    createdAt: '2026-10-15T09:00:00.000Z',
+    ledger: [
+      {
+        id: 'sled_mpd_02',
+        type: 'payment',
+        supplierInvoiceNumber: 'MPD-88410',
+        date: '2026-11-08T14:30:00.000Z',
+        description: 'Partial payment to Order Booker Tariq Mehmood · Cash',
+        totalBilledAmount: 0,
+        paidAmount: 5000,
+        paymentMethod: 'Cash',
+        orderBookerName: 'Tariq Mehmood',
+        note: 'Collected on Thursday counter visit',
+      },
+      {
+        id: 'sled_mpd_01',
+        type: 'grn_invoice',
+        grnNumber: 'GRN-20261105-101',
+        supplierInvoiceNumber: 'MPD-88410',
+        date: '2026-11-05T11:15:00.000Z',
+        description: 'GRN Purchase Invoice · MPD-88410 (30+3 Bonus Scheme)',
+        totalBilledAmount: 18400,
+        paidAmount: 5000,
+        paymentMethod: 'Cash',
+        orderBookerName: 'Tariq Mehmood',
+        totalBonusPacks: 3,
+        totalBonusSavingsValue: 1560,
+        note: '10+1 Trade Bonus Scheme applied on Panadol 500mg',
+        items: [
+          {
+            medicineId: 'med_panadol_500',
+            medicineName: 'Panadol 500mg',
+            strength: '500mg',
+            batchNumber: 'B-7041',
+            expiryDate: '2027-08-15',
+            billedPacks: 30,
+            bonusPacks: 3,
+            totalPacksReceived: 33,
+            invoiceTradeRatePerPack: 520,
+            tradeDiscountPercent: 0,
+            lineNetTotal: 15600,
+            effectiveCostPerPack: 472.73,
+            newRetailMRPPerPack: 640,
+          },
+          {
+            medicineId: 'med_flagyl_400',
+            medicineName: 'Flagyl 400mg',
+            strength: '400mg',
+            batchNumber: 'SAN-881',
+            expiryDate: '2027-09-30',
+            billedPacks: 20,
+            bonusPacks: 0,
+            totalPacksReceived: 20,
+            invoiceTradeRatePerPack: 140,
+            tradeDiscountPercent: 0,
+            lineNetTotal: 2800,
+            effectiveCostPerPack: 140,
+            newRetailMRPPerPack: 180,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'sup_ali_brothers_02',
+    distributorName: 'Ali Brothers Multan',
+    companyBrands: 'Pfizer, GSK Antibiotics, Acon Diagnostics',
+    orderBookerName: 'Kashif Raza (Order Booker)',
+    orderBookerPhone: '0301 774 9102',
+    visitDay: 'Tuesday & Saturday',
+    address: 'Outside Bohar Gate Medicine Market, Multan',
+    ntnOrLicence: 'DL-361-ABM-419',
+    balancePayable: 4680,
+    totalPurchasedAmount: 11680,
+    totalPaidAmount: 7000,
+    totalBonusValueSaved: 780,
+    updatedAt: '2026-11-07T16:10:00.000Z',
+    createdAt: '2026-10-18T10:00:00.000Z',
+    ledger: [
+      {
+        id: 'sled_abm_01',
+        type: 'grn_invoice',
+        grnNumber: 'GRN-20261107-102',
+        supplierInvoiceNumber: 'ABM-4092',
+        date: '2026-11-07T16:10:00.000Z',
+        description: 'GRN Purchase Invoice · ABM-4092 (10+1 Bonus on Augmentin & Ponstan)',
+        totalBilledAmount: 11680,
+        paidAmount: 7000,
+        paymentMethod: 'EasyPaisa',
+        orderBookerName: 'Kashif Raza',
+        totalBonusPacks: 2,
+        totalBonusSavingsValue: 780,
+        note: 'Part paid via EasyPaisa, balance on 14-day credit',
+        items: [
+          {
+            medicineId: 'med_augmentin_625',
+            medicineName: 'Augmentin 625mg',
+            strength: '625mg',
+            batchNumber: 'B-9912',
+            expiryDate: '2027-06-30',
+            billedPacks: 20,
+            bonusPacks: 1,
+            totalPacksReceived: 21,
+            invoiceTradeRatePerPack: 390,
+            tradeDiscountPercent: 0,
+            lineNetTotal: 7800,
+            effectiveCostPerPack: 371.43,
+            newRetailMRPPerPack: 470,
+          },
+          {
+            medicineId: 'med_ponstan_forte',
+            medicineName: 'Ponstan Forte 500mg',
+            strength: '500mg',
+            batchNumber: 'PNS-712',
+            expiryDate: '2027-11-25',
+            billedPacks: 10,
+            bonusPacks: 1,
+            totalPacksReceived: 11,
+            invoiceTradeRatePerPack: 388,
+            tradeDiscountPercent: 0,
+            lineNetTotal: 3880,
+            effectiveCostPerPack: 352.73,
+            newRetailMRPPerPack: 490,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'sup_getz_south_03',
+    distributorName: 'Getz South Punjab',
+    companyBrands: 'Getz Pharma (Risek, Getryl, Claritek)',
+    orderBookerName: 'Zeeshan Haider (Medical Rep)',
+    orderBookerPhone: '0321 681 5530',
+    visitDay: 'Wednesday',
+    address: 'Industrial Estate Pharma Depot, Multan',
+    ntnOrLicence: 'DL-361-GTZ-104',
+    balancePayable: 0,
+    totalPurchasedAmount: 8700,
+    totalPaidAmount: 8700,
+    totalBonusValueSaved: 870,
+    updatedAt: '2026-11-06T12:00:00.000Z',
+    createdAt: '2026-10-20T09:00:00.000Z',
+    ledger: [
+      {
+        id: 'sled_gtz_01',
+        type: 'grn_invoice',
+        grnNumber: 'GRN-20261106-103',
+        supplierInvoiceNumber: 'GTZ-99201',
+        date: '2026-11-06T12:00:00.000Z',
+        description: 'GRN Purchase Invoice · GTZ-99201 (30+3 Trade Bonus Scheme)',
+        totalBilledAmount: 8700,
+        paidAmount: 8700,
+        paymentMethod: 'Cash',
+        orderBookerName: 'Zeeshan Haider',
+        totalBonusPacks: 3,
+        totalBonusSavingsValue: 870,
+        note: 'Settled 100% cash on delivery with 10+1 scheme',
+        items: [
+          {
+            medicineId: 'med_risek_20',
+            medicineName: 'Risek 20mg Capsule',
+            strength: '20mg',
+            batchNumber: 'GET-410',
+            expiryDate: '2027-05-10',
+            billedPacks: 30,
+            bonusPacks: 3,
+            totalPacksReceived: 33,
+            invoiceTradeRatePerPack: 290,
+            tradeDiscountPercent: 0,
+            lineNetTotal: 8700,
+            effectiveCostPerPack: 263.64,
+            newRetailMRPPerPack: 360,
+          },
+        ],
+      },
+    ],
+  },
+];
+
+
 

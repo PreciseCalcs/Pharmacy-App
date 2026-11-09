@@ -15,7 +15,12 @@ import {
   UserAccount,
   ExpenseRecord,
   MonthlyAuditSnapshot,
-  ShortBookEntry
+  ShortBookEntry,
+  SupplierAccount,
+  SupplierLedgerEntry,
+  GRNLineItem,
+  SupplierPaymentMethod,
+  INITIAL_SUPPLIER_ACCOUNTS
 } from '../types/pharmacy';
 import { INITIAL_ZAHID_MEDICINES } from '../data/initialMedicines';
 import { getDaysUntilExpiry, getTotalPiecesInStock, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
@@ -35,6 +40,7 @@ export interface PharmacyBackupSnapshot {
   expenses?: ExpenseRecord[];
   auditSnapshots?: MonthlyAuditSnapshot[];
   shortBook?: ShortBookEntry[];
+  supplierAccounts?: SupplierAccount[];
 }
 
 const INVENTORY_STORAGE_KEY = 'zahid_med_inventory_v2';
@@ -47,6 +53,7 @@ const KHATA_STORAGE_KEY = 'zahid_khata_customers_v1';
 const EXPENSES_STORAGE_KEY = 'zahid_pharmacy_expenses_v1';
 const AUDIT_SNAPSHOTS_KEY = 'zahid_monthly_audits_v1';
 const SHORT_BOOK_STORAGE_KEY = 'zahid_short_book_v1';
+const SUPPLIER_KHATA_STORAGE_KEY = 'zahid_supplier_accounts_v1';
 
 export class PharmacySyncEngine {
   private medicines: MedicineItem[] = [];
@@ -59,6 +66,7 @@ export class PharmacySyncEngine {
   private expenses: ExpenseRecord[] = [];
   private auditSnapshots: MonthlyAuditSnapshot[] = [];
   private shortBook: ShortBookEntry[] = [];
+  private supplierAccounts: SupplierAccount[] = [...INITIAL_SUPPLIER_ACCOUNTS];
   private subscribers: Array<() => void> = [];
 
   constructor() {
@@ -166,6 +174,15 @@ export class PharmacySyncEngine {
       // 8. Load Counter Short Book (Want List)
       const savedShortBook = localStorage.getItem(SHORT_BOOK_STORAGE_KEY);
       this.shortBook = savedShortBook ? JSON.parse(savedShortBook) : [];
+
+      // 9. Load Supplier / Distributor Khata & GRN Ledger
+      const savedSuppliers = localStorage.getItem(SUPPLIER_KHATA_STORAGE_KEY);
+      if (savedSuppliers) {
+        this.supplierAccounts = JSON.parse(savedSuppliers);
+      } else {
+        this.supplierAccounts = [...INITIAL_SUPPLIER_ACCOUNTS];
+        localStorage.setItem(SUPPLIER_KHATA_STORAGE_KEY, JSON.stringify(this.supplierAccounts));
+      }
     } catch (e) {
       console.warn('Failed to initialize local pharmacy store, falling back to defaults', e);
       this.medicines = [...INITIAL_ZAHID_MEDICINES];
@@ -178,6 +195,7 @@ export class PharmacySyncEngine {
       this.expenses = [];
       this.auditSnapshots = [];
       this.shortBook = [];
+      this.supplierAccounts = [...INITIAL_SUPPLIER_ACCOUNTS];
     }
   }
 
@@ -1532,6 +1550,304 @@ export class PharmacySyncEngine {
     }
   }
 
+  // --- Supplier / Distributor Khata & Purchase Invoice (GRN) Ledger ---
+  public getSupplierAccounts(): SupplierAccount[] {
+    return [...this.supplierAccounts];
+  }
+
+  public getTotalSupplierPayable(): number {
+    return this.supplierAccounts.reduce(
+      (sum, s) => sum + (s.balancePayable > 0 ? s.balancePayable : 0),
+      0
+    );
+  }
+
+  public getSuppliersWithPayableCount(): number {
+    return this.supplierAccounts.filter((s) => s.balancePayable > 0).length;
+  }
+
+  public getTotalBonusSchemeSavings(): number {
+    return this.supplierAccounts.reduce(
+      (sum, s) => sum + (s.totalBonusValueSaved || 0),
+      0
+    );
+  }
+
+  public async addSupplierAccount(data: {
+    distributorName: string;
+    companyBrands: string;
+    orderBookerName: string;
+    orderBookerPhone: string;
+    visitDay: string;
+    address?: string;
+    ntnOrLicence?: string;
+    openingBalancePayable?: number;
+  }): Promise<SupplierAccount> {
+    const cleanName = data.distributorName.trim();
+    if (!cleanName) {
+      throw new Error('Distributor / Supplier name is required.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const openingPayable = Math.max(0, Number(data.openingBalancePayable) || 0);
+    const ledger: SupplierLedgerEntry[] = [];
+
+    if (openingPayable > 0) {
+      ledger.push({
+        id: `sled_open_${Date.now()}`,
+        type: 'grn_invoice',
+        grnNumber: `OPEN-${Date.now().toString().slice(-4)}`,
+        date: nowIso,
+        description: 'Opening payable balance brought forward',
+        totalBilledAmount: openingPayable,
+        paidAmount: 0,
+        paymentMethod: 'Credit',
+        orderBookerName: data.orderBookerName.trim(),
+      });
+    }
+
+    const newSupplier: SupplierAccount = {
+      id: `sup_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      distributorName: cleanName,
+      companyBrands: data.companyBrands.trim() || 'General Pharma & Store Supplies',
+      orderBookerName: data.orderBookerName.trim() || 'Medical Rep',
+      orderBookerPhone: data.orderBookerPhone.trim() || '',
+      visitDay: data.visitDay.trim() || 'Weekly',
+      address: data.address?.trim() || '',
+      ntnOrLicence: data.ntnOrLicence?.trim() || '',
+      balancePayable: openingPayable,
+      totalPurchasedAmount: openingPayable,
+      totalPaidAmount: 0,
+      totalBonusValueSaved: 0,
+      ledger,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    this.supplierAccounts.unshift(newSupplier);
+    this.saveSuppliers();
+    this.enqueueOutbox('UPSERT_SUPPLIER', newSupplier);
+    this.notify();
+
+    try {
+      await this.upsertPbRecord('suppliers_khata', newSupplier.id, newSupplier);
+    } catch {}
+
+    return newSupplier;
+  }
+
+  /**
+   * Records a Goods Received Note (GRN / Purchase Invoice) from a distributor:
+   * 1. Adds billedPacks + bonusPacks (Trade Bonus Scheme e.g. 10+1) directly into medicine shelf stock.
+   * 2. Recalculates and updates the medicine's effective unitCostPrice & looseCostPrice so free bonus packs
+   *    accurately lower the real unit cost and increase gross margin.
+   * 3. Updates batchNumber, expiryDate, and optional retail MRP.
+   * 4. Logs the GRN invoice and any immediate cash/transfer paid to the Order Booker in the Supplier Khata.
+   */
+  public async recordSupplierGRN(data: {
+    supplierId: string;
+    supplierInvoiceNumber: string;
+    orderBookerName?: string;
+    items: Array<{
+      medicineId: string;
+      billedPacks: number;
+      bonusPacks: number;
+      invoiceTradeRatePerPack: number;
+      tradeDiscountPercent?: number;
+      batchNumber?: string;
+      expiryDate?: string;
+      newRetailMRPPerPack?: number;
+    }>;
+    paidNowAmount: number;
+    paymentMethod: SupplierPaymentMethod;
+    note?: string;
+  }): Promise<SupplierAccount> {
+    const supplier = this.supplierAccounts.find((s) => s.id === data.supplierId);
+    if (!supplier) {
+      throw new Error('Distributor account not found.');
+    }
+    if (!data.items || data.items.length === 0) {
+      throw new Error('Please add at least one medicine or product line to the GRN invoice.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const dateCompact = nowIso.slice(0, 10).replace(/-/g, '');
+    const grnNumber = `GRN-${dateCompact}-${Math.floor(100 + Math.random() * 900)}`;
+
+    const processedLines: GRNLineItem[] = [];
+    let invoiceBilledTotal = 0;
+    let totalBonusPacks = 0;
+    let totalBonusSavingsValue = 0;
+
+    for (const rawLine of data.items) {
+      const med = this.medicines.find((m) => m.id === rawLine.medicineId);
+      if (!med) continue;
+
+      const billed = Math.max(1, Number(rawLine.billedPacks) || 1);
+      const bonus = Math.max(0, Number(rawLine.bonusPacks) || 0);
+      const totalReceived = billed + bonus;
+      const tradeRate = Math.max(0, Number(rawLine.invoiceTradeRatePerPack) || med.unitCostPrice || 0);
+      const discPct = Math.min(100, Math.max(0, Number(rawLine.tradeDiscountPercent) || 0));
+
+      const grossLine = billed * tradeRate;
+      const lineNetTotal = Math.round(grossLine * (1 - discPct / 100));
+      // True effective cost per pack after factoring in free bonus packs (e.g. 10+1)
+      const effectiveCostPerPack = Number((lineNetTotal / totalReceived).toFixed(2));
+      const bonusSavings = Math.round(bonus * tradeRate);
+
+      invoiceBilledTotal += lineNetTotal;
+      totalBonusPacks += bonus;
+      totalBonusSavingsValue += bonusSavings;
+
+      const finalBatch = rawLine.batchNumber?.trim() || med.batchNumber;
+      const finalExpiry = rawLine.expiryDate?.trim() || med.expiryDate;
+      const finalRetail =
+        rawLine.newRetailMRPPerPack && rawLine.newRetailMRPPerPack > 0
+          ? Number(rawLine.newRetailMRPPerPack)
+          : med.unitRetailPrice;
+
+      // Update inventory stock and effective cost price
+      const unitsPerPack = med.unitsPerPack > 0 ? med.unitsPerPack : 1;
+      med.currentStockPacks += totalReceived;
+      med.unitCostPrice = effectiveCostPerPack;
+      med.looseCostPrice = Number((effectiveCostPerPack / unitsPerPack).toFixed(2));
+      med.unitRetailPrice = finalRetail;
+      med.looseRetailPrice = Number((finalRetail / unitsPerPack).toFixed(2));
+      med.batchNumber = finalBatch;
+      med.expiryDate = finalExpiry;
+      med.supplier = supplier.distributorName;
+      if (med.currentStockPacks > (med.minThresholdPacks || 5)) {
+        med.reorderStatus = 'needed';
+        med.orderedAt = undefined;
+      }
+      med.updated = nowIso;
+
+      processedLines.push({
+        medicineId: med.id,
+        medicineName: med.name,
+        strength: med.strength,
+        batchNumber: finalBatch,
+        expiryDate: finalExpiry,
+        billedPacks: billed,
+        bonusPacks: bonus,
+        totalPacksReceived: totalReceived,
+        invoiceTradeRatePerPack: tradeRate,
+        tradeDiscountPercent: discPct,
+        lineNetTotal,
+        effectiveCostPerPack,
+        newRetailMRPPerPack: finalRetail,
+      });
+    }
+
+    const paidNow = Math.max(0, Math.min(invoiceBilledTotal, Number(data.paidNowAmount) || 0));
+    const creditAdded = Math.max(0, invoiceBilledTotal - paidNow);
+
+    const invNo = data.supplierInvoiceNumber.trim() || grnNumber;
+    const schemeTag =
+      totalBonusPacks > 0 ? ` (+${totalBonusPacks} Free Bonus Packs)` : '';
+
+    const grnEntry: SupplierLedgerEntry = {
+      id: `sled_grn_${Date.now()}`,
+      type: 'grn_invoice',
+      grnNumber,
+      supplierInvoiceNumber: invNo,
+      date: nowIso,
+      description: `GRN Purchase Invoice · ${invNo}${schemeTag}`,
+      totalBilledAmount: invoiceBilledTotal,
+      paidAmount: paidNow,
+      paymentMethod: paidNow >= invoiceBilledTotal ? data.paymentMethod : 'Credit',
+      orderBookerName: data.orderBookerName?.trim() || supplier.orderBookerName,
+      items: processedLines,
+      totalBonusPacks,
+      totalBonusSavingsValue,
+      note: data.note?.trim(),
+    };
+
+    supplier.balancePayable += creditAdded;
+    supplier.totalPurchasedAmount += invoiceBilledTotal;
+    supplier.totalPaidAmount += paidNow;
+    supplier.totalBonusValueSaved = (supplier.totalBonusValueSaved || 0) + totalBonusSavingsValue;
+    supplier.updatedAt = nowIso;
+    supplier.ledger.unshift(grnEntry);
+
+    this.saveMedicines();
+    this.saveSuppliers();
+    this.enqueueOutbox('UPSERT_SUPPLIER', supplier);
+    this.notify();
+
+    try {
+      await this.upsertPbRecord('suppliers_khata', supplier.id, supplier);
+    } catch {}
+
+    return supplier;
+  }
+
+  /**
+   * Records a partial or full payment handed to the Order Booker / Medical Rep or transferred to the Distributor
+   */
+  public async recordSupplierPayment(data: {
+    supplierId: string;
+    amount: number;
+    paymentMethod: SupplierPaymentMethod;
+    supplierInvoiceNumber?: string;
+    orderBookerName?: string;
+    note?: string;
+  }): Promise<SupplierAccount> {
+    const supplier = this.supplierAccounts.find((s) => s.id === data.supplierId);
+    if (!supplier) {
+      throw new Error('Distributor account not found.');
+    }
+
+    const payAmount = Math.max(0, Number(data.amount) || 0);
+    if (payAmount <= 0) {
+      throw new Error('Payment amount must be greater than Rs. 0.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const repName = data.orderBookerName?.trim() || supplier.orderBookerName;
+
+    const paymentEntry: SupplierLedgerEntry = {
+      id: `sled_pay_${Date.now()}`,
+      type: 'payment',
+      supplierInvoiceNumber: data.supplierInvoiceNumber?.trim() || undefined,
+      date: nowIso,
+      description: `Payment to ${repName} · ${data.paymentMethod}${
+        data.supplierInvoiceNumber ? ` (Ref: ${data.supplierInvoiceNumber})` : ''
+      }`,
+      totalBilledAmount: 0,
+      paidAmount: payAmount,
+      paymentMethod: data.paymentMethod,
+      orderBookerName: repName,
+      note: data.note?.trim(),
+    };
+
+    supplier.balancePayable = Math.max(0, supplier.balancePayable - payAmount);
+    supplier.totalPaidAmount += payAmount;
+    supplier.updatedAt = nowIso;
+    supplier.ledger.unshift(paymentEntry);
+
+    this.saveSuppliers();
+    this.enqueueOutbox('UPSERT_SUPPLIER', supplier);
+    this.notify();
+
+    try {
+      await this.upsertPbRecord('suppliers_khata', supplier.id, supplier);
+    } catch {}
+
+    return supplier;
+  }
+
+  private saveSuppliers(): void {
+    try {
+      localStorage.setItem(
+        SUPPLIER_KHATA_STORAGE_KEY,
+        JSON.stringify(this.supplierAccounts)
+      );
+    } catch (e) {
+      console.error('Failed to write supplier accounts to localStorage', e);
+    }
+  }
+
   public createBackupSnapshot(): PharmacyBackupSnapshot {
     return {
       schemaVersion: '2.0',
@@ -1553,6 +1869,10 @@ export class PharmacySyncEngine {
       expenses: this.expenses.map((e) => ({ ...e })),
       auditSnapshots: this.auditSnapshots.map((a) => ({ ...a })),
       shortBook: this.shortBook.map((sb) => ({ ...sb })),
+      supplierAccounts: this.supplierAccounts.map((sup) => ({
+        ...sup,
+        ledger: Array.isArray(sup.ledger) ? sup.ledger.map((l) => ({ ...l })) : [],
+      })),
     };
   }
 
@@ -1692,6 +2012,13 @@ export class PharmacySyncEngine {
       this.saveShortBook();
     }
 
+    if (Array.isArray(parsed.supplierAccounts)) {
+      this.supplierAccounts = (parsed.supplierAccounts as SupplierAccount[]).filter(
+        (sup) => sup && typeof sup.id === 'string' && typeof sup.distributorName === 'string'
+      );
+      this.saveSuppliers();
+    }
+
     // Clear stale outbox and notify all views
     this.outbox = [];
     this.saveOutbox();
@@ -1718,11 +2045,13 @@ export class PharmacySyncEngine {
     this.expenses = [];
     this.auditSnapshots = [];
     this.shortBook = [];
+    this.supplierAccounts = [...INITIAL_SUPPLIER_ACCOUNTS];
     this.saveMedicines();
     this.saveSales();
     this.saveOutbox();
     this.saveKhata();
     this.saveShortBook();
+    this.saveSuppliers();
     try {
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.pharmacyDetails));
       localStorage.setItem(COUNTERS_STORAGE_KEY, JSON.stringify(this.counters));
