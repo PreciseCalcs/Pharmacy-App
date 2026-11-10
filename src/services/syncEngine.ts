@@ -521,6 +521,416 @@ export class PharmacySyncEngine {
     return true;
   }
 
+  public exportKhataBackupJSON(): {
+    content: string;
+    fileName: string;
+    customersCount: number;
+    totalBalanceDue: number;
+    totalEntriesCount: number;
+  } {
+    const totalBalanceDue = this.getTotalOutstandingKhata();
+    const totalEntriesCount = this.khataCustomers.reduce(
+      (sum, c) => sum + (Array.isArray(c.history) ? c.history.length : 0),
+      0
+    );
+    const dateSlug = new Date().toISOString().slice(0, 10);
+    const payload = {
+      backupType: 'ZAHID_PHARMACY_KHATA_VAULT_V1',
+      exportedAt: new Date().toISOString(),
+      storeName: this.pharmacyDetails.name,
+      summary: {
+        customersCount: this.khataCustomers.length,
+        owingAccountsCount: this.khataCustomers.filter((c) => c.balanceDue > 0).length,
+        totalBalanceDue,
+        totalEntriesCount,
+      },
+      customers: this.khataCustomers,
+    };
+
+    return {
+      content: JSON.stringify(payload, null, 2),
+      fileName: `Zahid_Credit_Khata_Vault_${dateSlug}.json`,
+      customersCount: this.khataCustomers.length,
+      totalBalanceDue,
+      totalEntriesCount,
+    };
+  }
+
+  public exportKhataSpreadsheetCSV(): {
+    content: string;
+    fileName: string;
+    customersCount: number;
+    totalBalanceDue: number;
+  } {
+    const escapeCsv = (val: unknown): string => {
+      const str = val === null || val === undefined ? '' : String(val);
+      if (/[",\r\n]/.test(str)) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const headers = [
+      'Customer ID',
+      'Customer Name',
+      'Phone / WhatsApp',
+      'Address',
+      'Net Balance Due (PKR)',
+      'Total Credit Orders (PKR)',
+      'Total Payments Received (PKR)',
+      'Credit Orders Count',
+      'Payments Count',
+      'Last Updated',
+      'Readable Order & Payment History',
+      'History JSON (Lossless Restore Data)',
+    ];
+
+    const rows: string[] = [headers.map(escapeCsv).join(',')];
+
+    this.khataCustomers.forEach((cust) => {
+      const history = Array.isArray(cust.history) ? cust.history : [];
+      const salesEntries = history.filter((h) => h.type === 'sale');
+      const paymentEntries = history.filter((h) => h.type === 'payment' || h.type === 'refund');
+      const totalOrdersAmt = salesEntries.reduce((s, h) => s + (Number(h.amount) || 0), 0);
+      const totalPaidAmt = paymentEntries.reduce((s, h) => s + (Number(h.amount) || 0), 0);
+
+      const readableSummary = history
+        .map((h) => {
+          const d = (h.date || '').slice(0, 10);
+          if (h.type === 'sale') {
+            const itemsText =
+              h.items && h.items.length > 0
+                ? h.items
+                    .map((it) => `${it.medicineName} x${it.quantity}${it.unitType === 'pack' ? 'P' : 'L'}`)
+                    .join(' + ')
+                : h.description;
+            return `[${d}] INV ${h.invoiceNumber || '-'} (+Rs.${h.amount}): ${itemsText}`;
+          }
+          return `[${d}] ${h.type === 'refund' ? 'REFUND' : 'PAID'} (-Rs.${h.amount} via ${h.paymentMethod || 'Cash'})`;
+        })
+        .join(' | ');
+
+      rows.push(
+        [
+          cust.id,
+          cust.name,
+          cust.phone,
+          cust.address || '',
+          cust.balanceDue,
+          totalOrdersAmt,
+          totalPaidAmt,
+          salesEntries.length,
+          paymentEntries.length,
+          cust.updatedAt || '',
+          readableSummary,
+          JSON.stringify(history),
+        ]
+          .map(escapeCsv)
+          .join(',')
+      );
+    });
+
+    const dateSlug = new Date().toISOString().slice(0, 10);
+    // Prepend UTF-8 BOM so Microsoft Excel opens Urdu & special characters properly
+    return {
+      content: '\uFEFF' + rows.join('\r\n'),
+      fileName: `Zahid_Credit_Khata_Spreadsheet_${dateSlug}.csv`,
+      customersCount: this.khataCustomers.length,
+      totalBalanceDue: this.getTotalOutstandingKhata(),
+    };
+  }
+
+  private parseCsvRows(csvText: string): string[][] {
+    const clean = csvText.replace(/^\uFEFF/, '');
+    const result: string[][] = [];
+    let row: string[] = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < clean.length; i++) {
+      const ch = clean[i];
+      const next = clean[i + 1];
+
+      if (inQuotes) {
+        if (ch === '"' && next === '"') {
+          current += '"';
+          i++;
+        } else if (ch === '"') {
+          inQuotes = false;
+        } else {
+          current += ch;
+        }
+      } else {
+        if (ch === '"') {
+          inQuotes = true;
+        } else if (ch === ',') {
+          row.push(current);
+          current = '';
+        } else if (ch === '\r' && next === '\n') {
+          row.push(current);
+          result.push(row);
+          row = [];
+          current = '';
+          i++;
+        } else if (ch === '\n' || ch === '\r') {
+          row.push(current);
+          result.push(row);
+          row = [];
+          current = '';
+        } else {
+          current += ch;
+        }
+      }
+    }
+    if (current.length > 0 || row.length > 0) {
+      row.push(current);
+      result.push(row);
+    }
+    return result.filter((r) => r.some((cell) => cell.trim() !== ''));
+  }
+
+  public parseKhataImportPreview(
+    rawText: string,
+    fileName: string
+  ): {
+    format: 'json' | 'csv';
+    customers: CustomerKhata[];
+    customersCount: number;
+    owingCount: number;
+    totalBalanceDue: number;
+    totalHistoryEntries: number;
+    exportedAt?: string;
+  } {
+    const trimmed = rawText.replace(/^\uFEFF/, '').trim();
+    const isJson = fileName.toLowerCase().endsWith('.json') || trimmed.startsWith('{') || trimmed.startsWith('[');
+
+    if (isJson) {
+      const parsed = JSON.parse(trimmed);
+      const rawList: any[] = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed.customers)
+        ? parsed.customers
+        : Array.isArray(parsed.khataCustomers)
+        ? parsed.khataCustomers
+        : [];
+
+      if (rawList.length === 0) {
+        throw new Error('No customer Khata records found in this JSON file.');
+      }
+
+      const nowIso = new Date().toISOString();
+      const customers: CustomerKhata[] = rawList
+        .filter((c) => c && typeof c.name === 'string' && c.name.trim() !== '')
+        .map((c, idx) => ({
+          id: typeof c.id === 'string' && c.id.trim() ? c.id.trim() : `kht_imp_${Date.now()}_${idx}`,
+          name: c.name.trim(),
+          phone: typeof c.phone === 'string' ? c.phone.trim() : '',
+          address: typeof c.address === 'string' ? c.address.trim() : '',
+          balanceDue: Math.max(0, Math.round(Number(c.balanceDue) || 0)),
+          history: Array.isArray(c.history) ? c.history : [],
+          createdAt: typeof c.createdAt === 'string' ? c.createdAt : nowIso,
+          updatedAt: typeof c.updatedAt === 'string' ? c.updatedAt : nowIso,
+        }));
+
+      const totalBalanceDue = customers.reduce((s, c) => s + (c.balanceDue > 0 ? c.balanceDue : 0), 0);
+      const owingCount = customers.filter((c) => c.balanceDue > 0).length;
+      const totalHistoryEntries = customers.reduce((s, c) => s + c.history.length, 0);
+
+      return {
+        format: 'json',
+        customers,
+        customersCount: customers.length,
+        owingCount,
+        totalBalanceDue,
+        totalHistoryEntries,
+        exportedAt: typeof parsed.exportedAt === 'string' ? parsed.exportedAt : undefined,
+      };
+    }
+
+    // Parse CSV Spreadsheet
+    const rows = this.parseCsvRows(trimmed);
+    if (rows.length < 2) {
+      throw new Error('Spreadsheet CSV must contain a header row and at least one customer row.');
+    }
+
+    const headerRow = rows[0].map((h) => h.trim().toLowerCase());
+    const findCol = (patterns: string[]): number =>
+      headerRow.findIndex((h) => patterns.some((p) => h.includes(p)));
+
+    const idIdx = findCol(['customer id', 'id']);
+    const nameIdx = findCol(['customer name', 'name', 'patient']);
+    const phoneIdx = findCol(['phone', 'whatsapp', 'mobile', 'contact']);
+    const addressIdx = findCol(['address', 'mohallah', 'city', 'location']);
+    const balanceIdx = findCol(['net balance', 'balance due', 'balance', 'due', 'amount']);
+    const updatedIdx = findCol(['last updated', 'updated']);
+    const historyJsonIdx = findCol(['history json', 'lossless']);
+
+    if (nameIdx === -1) {
+      throw new Error(
+        'Could not find a "Customer Name" column in the spreadsheet. Please ensure the first row has column headers (Customer Name, Phone, Address, Net Balance Due).'
+      );
+    }
+
+    const nowIso = new Date().toISOString();
+    const customers: CustomerKhata[] = [];
+
+    for (let r = 1; r < rows.length; r++) {
+      const cells = rows[r];
+      const rawName = (cells[nameIdx] || '').trim();
+      if (!rawName) continue;
+
+      const rawId = idIdx >= 0 ? (cells[idIdx] || '').trim() : '';
+      const rawPhone = phoneIdx >= 0 ? (cells[phoneIdx] || '').trim() : '';
+      const rawAddress = addressIdx >= 0 ? (cells[addressIdx] || '').trim() : '';
+      const rawBalanceStr = balanceIdx >= 0 ? (cells[balanceIdx] || '0').replace(/[^0-9.-]/g, '') : '0';
+      const balanceDue = Math.max(0, Math.round(Number(rawBalanceStr) || 0));
+      const updatedAt = updatedIdx >= 0 && cells[updatedIdx]?.trim() ? cells[updatedIdx].trim() : nowIso;
+
+      let history: KhataEntry[] = [];
+      if (historyJsonIdx >= 0 && cells[historyJsonIdx]?.trim()) {
+        try {
+          const parsedHist = JSON.parse(cells[historyJsonIdx].trim());
+          if (Array.isArray(parsedHist)) {
+            history = parsedHist;
+          }
+        } catch {}
+      }
+
+      if (history.length === 0 && balanceDue > 0) {
+        history.push({
+          id: `ent_csv_${Date.now()}_${r}`,
+          type: 'sale',
+          description: 'Opening / Imported Spreadsheet Balance',
+          amount: balanceDue,
+          paymentMethod: 'Credit',
+          date: nowIso,
+        });
+      }
+
+      customers.push({
+        id: rawId || `kht_csv_${Date.now()}_${r}`,
+        name: rawName,
+        phone: rawPhone || '0300 000 0000',
+        address: rawAddress,
+        balanceDue,
+        history,
+        createdAt: nowIso,
+        updatedAt,
+      });
+    }
+
+    if (customers.length === 0) {
+      throw new Error('No valid customer rows found in the CSV spreadsheet.');
+    }
+
+    return {
+      format: 'csv',
+      customers,
+      customersCount: customers.length,
+      owingCount: customers.filter((c) => c.balanceDue > 0).length,
+      totalBalanceDue: customers.reduce((s, c) => s + (c.balanceDue > 0 ? c.balanceDue : 0), 0),
+      totalHistoryEntries: customers.reduce((s, c) => s + c.history.length, 0),
+    };
+  }
+
+  public async applyKhataImport(
+    importedCustomers: CustomerKhata[],
+    mode: 'merge' | 'replace' = 'merge'
+  ): Promise<{
+    addedCount: number;
+    updatedCount: number;
+    totalCustomers: number;
+    totalBalanceDue: number;
+  }> {
+    let addedCount = 0;
+    let updatedCount = 0;
+
+    if (mode === 'replace') {
+      this.khataCustomers = importedCustomers.map((c) => ({ ...c }));
+      addedCount = importedCustomers.length;
+    } else {
+      for (const imp of importedCustomers) {
+        const cleanPhone = (imp.phone || '').replace(/\D/g, '');
+        const existing = this.khataCustomers.find(
+          (c) =>
+            c.id === imp.id ||
+            (cleanPhone.length >= 10 &&
+              cleanPhone !== '03000000000' &&
+              c.phone.replace(/\D/g, '') === cleanPhone) ||
+            c.name.trim().toLowerCase() === imp.name.trim().toLowerCase()
+        );
+
+        if (existing) {
+          // Merge history entries without duplicates
+          const existingEntryKeys = new Set(
+            existing.history.map(
+              (h) => `${h.id}|${h.type}|${h.invoiceNumber || ''}|${h.amount}|${(h.date || '').slice(0, 16)}`
+            )
+          );
+          let newEntriesAdded = 0;
+          for (const h of imp.history || []) {
+            const key = `${h.id}|${h.type}|${h.invoiceNumber || ''}|${h.amount}|${(h.date || '').slice(0, 16)}`;
+            const sameId = existing.history.some((eh) => eh.id === h.id);
+            const sameInv =
+              h.invoiceNumber &&
+              existing.history.some(
+                (eh) => eh.invoiceNumber === h.invoiceNumber && eh.type === h.type
+              );
+            if (!existingEntryKeys.has(key) && !sameId && !sameInv) {
+              existing.history.push(h);
+              newEntriesAdded++;
+            }
+          }
+
+          existing.history.sort(
+            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+          );
+
+          if (!existing.address && imp.address) existing.address = imp.address;
+          if ((!existing.phone || existing.phone === '0300 000 0000') && imp.phone) {
+            existing.phone = imp.phone;
+          }
+
+          // If new entries were merged, recalculate net balance from history, otherwise adopt imported balanceDue
+          if (newEntriesAdded > 0) {
+            const totalSales = existing.history
+              .filter((h) => h.type === 'sale')
+              .reduce((s, h) => s + (Number(h.amount) || 0), 0);
+            const totalCredits = existing.history
+              .filter((h) => h.type === 'payment' || h.type === 'refund')
+              .reduce((s, h) => s + (Number(h.amount) || 0), 0);
+            existing.balanceDue = Math.max(0, totalSales - totalCredits);
+          } else {
+            existing.balanceDue = imp.balanceDue;
+          }
+
+          existing.updatedAt = new Date().toISOString();
+          updatedCount++;
+        } else {
+          this.khataCustomers.unshift({ ...imp });
+          addedCount++;
+        }
+      }
+    }
+
+    this.saveKhata();
+    this.notify();
+
+    for (const cust of this.khataCustomers) {
+      this.enqueueOutbox('ADD_KHATA_CUSTOMER', cust);
+      try {
+        await this.upsertPbRecord('customers_khata', cust.id, cust);
+      } catch {}
+    }
+
+    return {
+      addedCount,
+      updatedCount,
+      totalCustomers: this.khataCustomers.length,
+      totalBalanceDue: this.getTotalOutstandingKhata(),
+    };
+  }
+
   private saveKhata(): void {
     try {
       localStorage.setItem(KHATA_STORAGE_KEY, JSON.stringify(this.khataCustomers));

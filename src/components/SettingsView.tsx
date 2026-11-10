@@ -20,7 +20,8 @@ import {
   Download,
   DatabaseBackup,
   RotateCcw,
-  FileJson
+  FileJson,
+  FileSpreadsheet
 } from 'lucide-react';
 import { PharmacyCounter, PharmacyDetails, UserAccount, UserRole } from '../types/pharmacy';
 import { syncEngine } from '../services/syncEngine';
@@ -78,6 +79,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   // Logo file input
   const logoInputRef = useRef<HTMLInputElement>(null);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
+  const khataCsvInputRef = useRef<HTMLInputElement>(null);
+  const [khataImportMode, setKhataImportMode] = useState<'merge' | 'replace'>('merge');
+  const [khataSyncNotice, setKhataSyncNotice] = useState<{
+    type: 'success' | 'error';
+    title: string;
+    detail: string;
+  } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
 
@@ -92,6 +100,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     medicines: syncEngine.getMedicines().length,
     sales: syncEngine.getSales().length,
     khata: syncEngine.getKhataCustomers().length,
+    khataBalance: syncEngine.getTotalOutstandingKhata(),
     staff: staffAuth.getStaffList().length,
   }));
 
@@ -100,6 +109,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       medicines: syncEngine.getMedicines().length,
       sales: syncEngine.getSales().length,
       khata: syncEngine.getKhataCustomers().length,
+      khataBalance: syncEngine.getTotalOutstandingKhata(),
       staff: staffAuth.getStaffList().length,
     });
   };
@@ -397,6 +407,79 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       title: 'Reset to default pharmacy catalog completed',
       detail: `Restored ${syncEngine.getMedicines().length} default medicines and cleared local transaction history.`,
     });
+  };
+
+  const handleExportKhataCSVFromSettings = () => {
+    try {
+      const { content, fileName, customersCount, totalBalanceDue } =
+        syncEngine.exportKhataSpreadsheetCSV();
+      const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      soundService.cashRegister();
+      refreshDbStats();
+      setKhataSyncNotice({
+        type: 'success',
+        title: `Credit Khata CSV exported (${fileName})`,
+        detail: `Exported ${customersCount} customer accounts and transaction histories (Total balance due: Rs. ${totalBalanceDue.toLocaleString()}).`,
+      });
+    } catch (err) {
+      soundService.errorTone();
+      setKhataSyncNotice({
+        type: 'error',
+        title: 'Khata CSV export failed',
+        detail: err instanceof Error ? err.message : 'Could not export Credit Khata CSV.',
+      });
+    }
+  };
+
+  const handleImportKhataCSVFromSettings = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const rawText = String(ev.target?.result || '');
+        const preview = syncEngine.parseKhataImportPreview(rawText, file.name);
+        const res = await syncEngine.applyKhataImport(preview.customers, khataImportMode);
+        refreshDbStats();
+        soundService.cashRegister();
+        setKhataSyncNotice({
+          type: 'success',
+          title:
+            khataImportMode === 'merge'
+              ? `Credit Khata records synced from ${file.name}`
+              : `Credit Khata database restored from ${file.name}`,
+          detail:
+            khataImportMode === 'merge'
+              ? `Added ${res.addedCount} new customers and updated ${res.updatedCount} existing accounts. Total Khata customers: ${res.totalCustomers} (Rs. ${res.totalBalanceDue.toLocaleString()} due).`
+              : `Restored ${res.totalCustomers} customer accounts (Rs. ${res.totalBalanceDue.toLocaleString()} total balance due).`,
+        });
+      } catch (err) {
+        soundService.errorTone();
+        setKhataSyncNotice({
+          type: 'error',
+          title: 'Failed to import Credit Khata CSV',
+          detail:
+            err instanceof Error
+              ? err.message
+              : 'Please upload a valid Credit Khata .CSV or .JSON backup file.',
+        });
+      } finally {
+        if (khataCsvInputRef.current) {
+          khataCsvInputRef.current.value = '';
+        }
+      }
+    };
+    reader.readAsText(file);
   };
 
  // If locked, render Owner PIN challenge
@@ -1030,6 +1113,145 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             This preview currently saves its sample data and edits only in this browser. Shared logins, database synchronization, and logo storage require the matching PocketBase collections, authentication, and access rules on your server.
           </p>
         </div>
+      </div>
+
+      {/* SECTION 5B: Credit Khata Settings — Export / Import Data (CSV) */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-4 border-b border-slate-100">
+          <div className="flex items-start gap-3.5">
+            <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 flex items-center justify-center shrink-0">
+              <FileSpreadsheet className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-900">
+                Credit Khata settings &middot; Export / Import Data
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Export your current customer database and transaction history to a <code className="font-mono text-slate-700">.csv</code> spreadsheet for manual backup, or upload a CSV file to restore and sync Khata records.
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-amber-50/90 border border-amber-200 rounded-xl px-3.5 py-2 text-right shrink-0">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-amber-800">
+              Active Khata Ledger
+            </div>
+            <div className="text-sm font-black text-amber-950 font-mono tabular-nums">
+              {dbStats.khata} Accounts &middot; Rs. {dbStats.khataBalance.toLocaleString()} Due
+            </div>
+          </div>
+        </div>
+
+        {/* Sub-section: Export / Import Data Controls */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Export Customer Database & Transaction History */}
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 flex flex-col justify-between gap-3">
+            <div>
+              <div className="text-xs font-extrabold text-slate-900">
+                Export Customer Database &amp; Transaction History (.CSV)
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                Downloads a spreadsheet containing all customer names, phone numbers, addresses, net balances due, and full itemized order &amp; payment history.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleExportKhataCSVFromSettings}
+              className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-xs shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Download className="w-4 h-4 text-emerald-300 shrink-0" />
+              <span>Export Khata Database to CSV (.csv)</span>
+            </button>
+          </div>
+
+          {/* Import / Upload CSV to Restore or Sync Khata */}
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 flex flex-col justify-between gap-3">
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-extrabold text-slate-900">
+                  Upload / Import CSV to Restore or Sync
+                </div>
+                <div className="inline-flex items-center gap-1 bg-slate-200/80 p-0.5 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setKhataImportMode('merge')}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition cursor-pointer ${
+                      khataImportMode === 'merge'
+                        ? 'bg-white text-emerald-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Smart Sync
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setKhataImportMode('replace')}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition cursor-pointer ${
+                      khataImportMode === 'replace'
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Full Restore
+                  </button>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                {khataImportMode === 'merge'
+                  ? 'Smart Sync merges uploaded CSV customer records and transaction history with existing accounts without deleting current data.'
+                  : 'Full Restore replaces the current Credit Khata list completely with the uploaded CSV backup file.'}
+              </p>
+            </div>
+
+            <div>
+              <input
+                ref={khataCsvInputRef}
+                type="file"
+                accept=".csv,.json,text/csv,application/json"
+                onChange={handleImportKhataCSVFromSettings}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => khataCsvInputRef.current?.click()}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 font-bold text-xs shadow-2xs transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Upload className="w-4 h-4 text-emerald-700 shrink-0" />
+                <span>Upload &amp; Import Khata CSV (.csv)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {khataSyncNotice && (
+          <div
+            className={`p-3.5 rounded-xl border flex items-start justify-between gap-3 text-xs ${
+              khataSyncNotice.type === 'success'
+                ? 'bg-emerald-50/90 border-emerald-200 text-emerald-900'
+                : 'bg-rose-50 border-rose-200 text-rose-900'
+            }`}
+          >
+            <div className="flex items-start gap-2.5">
+              {khataSyncNotice.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              )}
+              <div>
+                <div className="font-bold">{khataSyncNotice.title}</div>
+                <div className="text-[11px] opacity-90 mt-0.5">{khataSyncNotice.detail}</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setKhataSyncNotice(null)}
+              className="text-[11px] font-semibold underline opacity-75 hover:opacity-100 shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
       </div>
 
       {/* SECTION 6: Disaster Recovery — One-Click JSON Backup & Restore */}
