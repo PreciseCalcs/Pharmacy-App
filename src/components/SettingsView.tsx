@@ -132,18 +132,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 1024 * 1024) {
-      alert('Logo file must be less than 1MB');
+    if (file.size > 2 * 1024 * 1024) {
+      soundService.errorTone();
+      setBackupNotice({
+        type: 'error',
+        title: 'Logo file is too large',
+        detail: 'Please choose an image file smaller than 2 MB.',
+      });
       return;
     }
 
     const reader = new FileReader();
-    reader.onload = (uploadEvent) => {
+    reader.onload = async (uploadEvent) => {
       const base64 = uploadEvent.target?.result as string;
-      setDetails((prev) => ({ ...prev, logoUrl: base64 }));
-      soundService.click();
+      const nextDetails = { ...details, logoUrl: base64 };
+      setDetails(nextDetails);
+      const updated = await syncEngine.updatePharmacyDetails(nextDetails);
+      onSettingsSaved(updated);
+      soundService.cashRegister();
+      setSaveSuccessNotice(true);
+      setTimeout(() => setSaveSuccessNotice(false), 3000);
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleRemoveLogo = async () => {
+    const nextDetails = { ...details, logoUrl: undefined };
+    setDetails(nextDetails);
+    const updated = await syncEngine.updatePharmacyDetails(nextDetails);
+    onSettingsSaved(updated);
+    if (logoInputRef.current) {
+      logoInputRef.current.value = '';
+    }
+    soundService.click();
   };
 
   const handleAddCounter = (e: React.FormEvent) => {
@@ -557,7 +578,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <p className="text-xs text-slate-500 mt-0.5">
                 Name, licence, NTN and contact details are used on receipts and reports.
               </p>
-              <div className="mt-2.5 flex items-center gap-2">
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
                 <input
                   ref={logoInputRef}
                   type="file"
@@ -568,13 +589,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <button
                   type="button"
                   onClick={() => logoInputRef.current?.click()}
-                  className="px-3 py-1.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 shadow-2xs"
+                  className="px-3 py-1.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 shadow-2xs cursor-pointer"
                 >
                   <Upload className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Choose logo</span>
+                  <span>{details.logoUrl ? 'Change logo' : 'Choose logo'}</span>
                 </button>
+                {details.logoUrl && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveLogo}
+                    className="px-2.5 py-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Reset default emblem</span>
+                  </button>
+                )}
                 <span className="text-[11px] text-slate-400">
-                  Image saved on this device for the preview. Maximum 1 MB.
+                  Automatically updates the Overview banner, sidebar, and thermal receipts (Max 2 MB).
                 </span>
               </div>
             </div>

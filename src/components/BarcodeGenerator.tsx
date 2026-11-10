@@ -44,10 +44,79 @@ const START_CODE_B = 104;
 const STOP_CODE = 106;
 const QUIET_ZONE = '0000000000'; // 10-module quiet zone on each side
 
+export type BarcodeFormatPreset = 'ean13_pk' | 'short_8' | 'zms_sku';
+
+/**
+ * Computes the official GS1 Modulo-10 check digit for a 12-digit numeric prefix.
+ */
+export function calculateEAN13CheckDigit(digits12: string): string {
+  const clean = digits12.replace(/\D/g, '').padEnd(12, '0').slice(0, 12);
+  let sum = 0;
+  for (let i = 0; i < 12; i++) {
+    const digit = parseInt(clean[i], 10) || 0;
+    sum += i % 2 === 0 ? digit : digit * 3;
+  }
+  const remainder = sum % 10;
+  const checkDigit = remainder === 0 ? 0 : 10 - remainder;
+  return String(checkDigit);
+}
+
+/**
+ * Generates a unique, scanner-ready barcode string that does not collide with existing inventory codes.
+ * - 'ean13_pk': 13-digit GS1 Pakistan prefix (8964...) with valid Modulo-10 check digit
+ * - 'short_8': Compact 8-digit store barcode (20XXXXXX) for narrow labels & loose strips
+ * - 'zms_sku': Alphanumeric store barcode (ZMS-XXXXXX) for unpacked surgical/herbal/custom kits
+ */
+export function generateSmartBarcode(
+  format: BarcodeFormatPreset = 'ean13_pk',
+  existingCodes?: Set<string>,
+  skuHint?: string
+): string {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    let candidate = '';
+    if (format === 'ean13_pk') {
+      const random8 = String(Math.floor(10000000 + Math.random() * 90000000));
+      const base12 = `8964${random8}`;
+      candidate = `${base12}${calculateEAN13CheckDigit(base12)}`;
+    } else if (format === 'short_8') {
+      const random6 = String(Math.floor(100000 + Math.random() * 900000));
+      candidate = `20${random6}`;
+    } else {
+      const cleanHint = (skuHint || '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .slice(0, 3);
+      const randomDigits = String(Math.floor(1000 + Math.random() * 9000));
+      candidate = cleanHint ? `ZMS-${cleanHint}${randomDigits}` : `ZMS-${Math.floor(100000 + Math.random() * 900000)}`;
+    }
+
+    if (!existingCodes || !existingCodes.has(candidate)) {
+      return candidate;
+    }
+  }
+  return `8964${Date.now().toString().slice(-8)}0`;
+}
+
+export function isCustomOrMissingBarcode(barcode?: string): {
+  isMissing: boolean;
+  isStoreGenerated: boolean;
+} {
+  const clean = (barcode || '').trim();
+  if (!clean || clean.length < 4) {
+    return { isMissing: true, isStoreGenerated: false };
+  }
+  const isStoreGenerated =
+    clean.startsWith('ZMS-') ||
+    clean.startsWith('20') ||
+    clean.startsWith('896499') ||
+    clean.startsWith('MED-');
+  return { isMissing: false, isStoreGenerated };
+}
+
 /**
  * Encodes an ASCII string into valid Code-128B bars (with Start Code B, Modulo-103 Checksum, and Stop Pattern)
  */
-function encodeCode128B(rawInput: string): Array<{ width: number; isBlack: boolean }> {
+export function encodeCode128B(rawInput: string): Array<{ width: number; isBlack: boolean }> {
   const clean = (rawInput || '0000000000').trim() || '0000000000';
   let checksum = START_CODE_B;
   const symbolPatterns: string[] = [QUIET_ZONE, CODE128_PATTERNS[START_CODE_B]];

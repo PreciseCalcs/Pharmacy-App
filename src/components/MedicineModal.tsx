@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Pill, Save, Sparkles, AlertCircle, Upload, Trash2, Image as ImageIcon, ShoppingBag, Heart } from 'lucide-react';
+import { X, Pill, Save, Sparkles, AlertCircle, Upload, Trash2, Image as ImageIcon, ShoppingBag, Heart, RefreshCw, Barcode } from 'lucide-react';
 import { DosageForm, MedicineCategory, MedicineItem, ProductDepartment } from '../types/pharmacy';
 import { soundService } from '../services/soundAlerts';
 import { getExpiryBadgeMeta } from '../utils/pharmacyHelpers';
+import { BarcodeGenerator, generateSmartBarcode } from './BarcodeGenerator';
 
 interface MedicineModalProps {
   isOpen: boolean;
@@ -619,13 +620,64 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Barcode / GTIN</label>
+              <div className="sm:col-span-2">
+                <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
+                  <label className="block font-semibold text-slate-700 flex items-center gap-1">
+                    <Barcode className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Barcode / GTIN (Scan or Generate)</span>
+                  </label>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({
+                          ...formData,
+                          barcode: generateSmartBarcode('ean13_pk', undefined, formData.name),
+                        });
+                        soundService.click();
+                      }}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold border border-emerald-200 flex items-center gap-0.5 cursor-pointer"
+                      title="Generate 13-Digit GS1 Pakistan Barcode"
+                    >
+                      <RefreshCw className="w-2.5 h-2.5" />
+                      <span>13-Digit</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({
+                          ...formData,
+                          barcode: generateSmartBarcode('short_8', undefined, formData.name),
+                        });
+                        soundService.click();
+                      }}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-emerald-50 text-slate-700 font-bold border border-slate-200 cursor-pointer"
+                      title="Generate 8-Digit Compact Store Barcode"
+                    >
+                      8-Digit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({
+                          ...formData,
+                          barcode: generateSmartBarcode('zms_sku', undefined, formData.name || 'ZMS'),
+                        });
+                        soundService.click();
+                      }}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-emerald-50 text-slate-700 font-bold border border-slate-200 cursor-pointer"
+                      title="Generate ZMS-SKU Custom Store Barcode"
+                    >
+                      ZMS-Code
+                    </button>
+                  </div>
+                </div>
                 <input
                   type="text"
+                  placeholder="Scan factory barcode or click a generator button above"
                   value={formData.barcode || ''}
                   onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono font-bold text-slate-900"
                 />
               </div>
 
@@ -636,6 +688,16 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                   value={formData.sku || ''}
                   onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono"
+                />
+              </div>
+
+              <div className=" flex items-center justify-center bg-slate-50 rounded-lg border border-slate-200 p-1.5">
+                <BarcodeGenerator
+                  value={formData.barcode || formData.sku || '8964000000000'}
+                  type="code128"
+                  width={130}
+                  height={28}
+                  showText={true}
                 />
               </div>
             </div>

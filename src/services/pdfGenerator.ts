@@ -12,6 +12,7 @@ import {
 import { formatDateTime } from '../utils/dates';
 import { formatPKR, getPieceRetailPrice } from '../utils/pharmacyHelpers';
 import { syncEngine } from './syncEngine';
+import { encodeCode128B } from '../components/BarcodeGenerator';
 
 export function generateSalesReportPDF(
   transactions: SaleTransaction[],
@@ -1214,6 +1215,322 @@ export function generateCustomerKhataPDF(
   const blob = doc.output('blob');
   return { blob, fileName };
 }
+
+export type BarcodeLabelPaperLayout =
+  | 'a4_40' // 4 x 10 grid on A4 (52.5 x 29.7mm)
+  | 'a4_24' // 3 x 8 grid on A4 (70 x 37mm)
+  | 'a4_65' // 5 x 13 grid on A4 (38.1 x 21.2mm)
+  | 'thermal_50x25' // 50 x 25mm continuous thermal label roll
+  | 'thermal_40x30'; // 40 x 30mm continuous thermal label roll
+
+export interface BarcodeLabelPrintJobItem {
+  id: string;
+  productName: string;
+  genericOrStrength?: string;
+  barcodeValue: string;
+  sku?: string;
+  packPrice: number;
+  unitPrice?: number;
+  priceDisplayMode: 'pack' | 'unit' | 'both' | 'none';
+  batchNumber?: string;
+  expiryDate?: string;
+  shelfLocation?: string;
+  copies: number;
+}
+
+export interface BarcodeLabelPrintConfig {
+  layout: BarcodeLabelPaperLayout;
+  showStoreHeader: boolean;
+  showBatchAndExpiry: boolean;
+  showShelfLocation: boolean;
+  showCutBorders: boolean;
+}
+
+function drawVectorCode128OnPdf(
+  doc: jsPDF,
+  barcodeValue: string,
+  x: number,
+  y: number,
+  maxWidthMm: number,
+  barHeightMm: number
+) {
+  const bars = encodeCode128B(barcodeValue || '0000000000');
+  const totalUnits = bars.reduce((sum, b) => sum + b.width, 0) || 1;
+  const unitWidthMm = maxWidthMm / totalUnits;
+
+  doc.setFillColor(0, 0, 0);
+  let cursorX = x;
+  for (const bar of bars) {
+    const w = bar.width * unitWidthMm;
+    if (bar.isBlack) {
+      doc.rect(cursorX, y, w, barHeightMm, 'F');
+    }
+    cursorX += w;
+  }
+}
+
+export function generateBarcodeLabelsPDF(
+  items: BarcodeLabelPrintJobItem[],
+  config: BarcodeLabelPrintConfig
+): { fileName: string; totalStickers: number } {
+  const details = syncEngine.getPharmacyDetails() || ZAHID_PHARMACY_DETAILS;
+
+  // Expand copies into flat sticker list
+  const expandedStickers: BarcodeLabelPrintJobItem[] = [];
+  for (const item of items) {
+    const count = Math.max(1, Math.min(500, item.copies || 1));
+    for (let i = 0; i < count; i++) {
+      expandedStickers.push(item);
+    }
+  }
+
+  if (expandedStickers.length === 0) {
+    throw new Error('No barcode stickers in print queue.');
+  }
+
+  const isThermal =
+    config.layout === 'thermal_50x25' || config.layout === 'thermal_40x30';
+
+  if (isThermal) {
+    const labelW = config.layout === 'thermal_50x25' ? 50 : 40;
+    const labelH = config.layout === 'thermal_50x25' ? 25 : 30;
+
+    const doc = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: [labelW, labelH],
+    });
+
+    expandedStickers.forEach((sticker, index) => {
+      if (index > 0) {
+        doc.addPage([labelW, labelH], 'landscape');
+      }
+
+      if (config.showCutBorders) {
+        doc.setDrawColor(210, 214, 220);
+        doc.setLineWidth(0.2);
+        doc.rect(1, 1, labelW - 2, labelH - 2);
+      }
+
+      let curY = 3.2;
+
+      if (config.showStoreHeader) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(5.8);
+        doc.setTextColor(15, 23, 42);
+        doc.text(details.name.toUpperCase().slice(0, 28), labelW / 2, curY, {
+          align: 'center',
+        });
+        curY += 2.6;
+      }
+
+      // Product Name
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.2);
+      doc.setTextColor(0, 0, 0);
+      doc.text(sticker.productName.slice(0, 24), labelW / 2, curY, {
+        align: 'center',
+      });
+      curY += 2.5;
+
+      // Strength / Generic + Price Line
+      let priceStr = '';
+      if (sticker.priceDisplayMode === 'pack') {
+        priceStr = `Rs.${sticker.packPrice}`;
+      } else if (sticker.priceDisplayMode === 'unit') {
+        priceStr = `Rs.${(sticker.unitPrice ?? sticker.packPrice).toFixed(1)}/u`;
+      } else if (sticker.priceDisplayMode === 'both') {
+        priceStr = `Rs.${sticker.packPrice} (${(sticker.unitPrice ?? sticker.packPrice).toFixed(1)}/u)`;
+      }
+
+      const subLine = [
+        sticker.genericOrStrength ? sticker.genericOrStrength.slice(0, 14) : '',
+        priceStr,
+      ]
+        .filter(Boolean)
+        .join(' • ');
+
+      if (subLine) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(6);
+        doc.text(subLine, labelW / 2, curY, { align: 'center' });
+        curY += 1.6;
+      }
+
+      // Vector Code-128 Barcode
+      const barcodeMarginX = 3;
+      const barcodeW = labelW - barcodeMarginX * 2;
+      const barcodeH = config.layout === 'thermal_50x25' ? 7.8 : 9.5;
+      drawVectorCode128OnPdf(doc, sticker.barcodeValue, barcodeMarginX, curY, barcodeW, barcodeH);
+      curY += barcodeH + 2.4;
+
+      // Human-readable barcode digits
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(6.5);
+      doc.text(sticker.barcodeValue, labelW / 2, curY, { align: 'center' });
+      curY += 2.2;
+
+      // Optional Batch / Expiry / Shelf Footer
+      if (config.showBatchAndExpiry || config.showShelfLocation) {
+        const metaParts: string[] = [];
+        if (config.showBatchAndExpiry && sticker.batchNumber) {
+          metaParts.push(`B:${sticker.batchNumber}`);
+        }
+        if (config.showBatchAndExpiry && sticker.expiryDate) {
+          metaParts.push(`EXP:${sticker.expiryDate}`);
+        }
+        if (config.showShelfLocation && sticker.shelfLocation) {
+          metaParts.push(sticker.shelfLocation);
+        }
+        if (metaParts.length > 0 && curY <= labelH - 1.2) {
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(4.8);
+          doc.text(metaParts.join(' | ').slice(0, 34), labelW / 2, curY, {
+            align: 'center',
+          });
+        }
+      }
+    });
+
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const fileName = `Zahid_Thermal_Barcodes_${config.layout}_${dateStamp}.pdf`;
+    doc.save(fileName);
+    return { fileName, totalStickers: expandedStickers.length };
+  }
+
+  // A4 Sticker Grid Sheet Layouts
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const gridSpec =
+    config.layout === 'a4_24'
+      ? { cols: 3, rows: 8, marginX: 6, marginY: 8.5, cellW: 66, cellH: 35 }
+      : config.layout === 'a4_65'
+      ? { cols: 5, rows: 13, marginX: 4.7, marginY: 10.7, cellW: 38.1, cellH: 21.2 }
+      : { cols: 4, rows: 10, marginX: 5, marginY: 8.5, cellW: 50, cellH: 28 }; // a4_40 default
+
+  const perPage = gridSpec.cols * gridSpec.rows;
+
+  expandedStickers.forEach((sticker, idx) => {
+    const pageIndex = Math.floor(idx / perPage);
+    const slotInPage = idx % perPage;
+    if (idx > 0 && slotInPage === 0) {
+      doc.addPage('a4', 'portrait');
+    }
+
+    const col = slotInPage % gridSpec.cols;
+    const row = Math.floor(slotInPage / gridSpec.cols);
+
+    const cellX = gridSpec.marginX + col * gridSpec.cellW;
+    const cellY = gridSpec.marginY + row * gridSpec.cellH;
+
+    if (config.showCutBorders) {
+      doc.setDrawColor(220, 224, 230);
+      doc.setLineWidth(0.18);
+      doc.rect(cellX + 0.6, cellY + 0.6, gridSpec.cellW - 1.2, gridSpec.cellH - 1.2);
+    }
+
+    const centerX = cellX + gridSpec.cellW / 2;
+    const isMini = config.layout === 'a4_65';
+    const isLarge = config.layout === 'a4_24';
+
+    let curY = cellY + (isMini ? 3.0 : 3.8);
+
+    if (config.showStoreHeader) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(isMini ? 4.6 : isLarge ? 6.4 : 5.4);
+      doc.setTextColor(15, 23, 42);
+      doc.text(
+        details.name.toUpperCase().slice(0, isMini ? 22 : 30),
+        centerX,
+        curY,
+        { align: 'center' }
+      );
+      curY += isMini ? 2.1 : 2.6;
+    }
+
+    // Product Name
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(isMini ? 5.8 : isLarge ? 8.2 : 6.8);
+    doc.setTextColor(0, 0, 0);
+    doc.text(
+      sticker.productName.slice(0, isMini ? 20 : isLarge ? 30 : 24),
+      centerX,
+      curY,
+      { align: 'center' }
+    );
+    curY += isMini ? 2.1 : 2.6;
+
+    // Price & Strength Row
+    let priceStr = '';
+    if (sticker.priceDisplayMode === 'pack') {
+      priceStr = `MRP: Rs.${sticker.packPrice}`;
+    } else if (sticker.priceDisplayMode === 'unit') {
+      priceStr = `Rs.${(sticker.unitPrice ?? sticker.packPrice).toFixed(1)}/Unit`;
+    } else if (sticker.priceDisplayMode === 'both') {
+      priceStr = `Rs.${sticker.packPrice} (${(sticker.unitPrice ?? sticker.packPrice).toFixed(1)}/u)`;
+    }
+
+    const subText = [
+      !isMini && sticker.genericOrStrength ? sticker.genericOrStrength.slice(0, 14) : '',
+      priceStr,
+    ]
+      .filter(Boolean)
+      .join(' • ');
+
+    if (subText) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(isMini ? 5.0 : isLarge ? 6.6 : 5.6);
+      doc.text(subText, centerX, curY, { align: 'center' });
+      curY += isMini ? 1.2 : 1.7;
+    }
+
+    // Vector Code-128 Bars
+    const barPadX = isMini ? 2.2 : 3.2;
+    const barW = gridSpec.cellW - barPadX * 2;
+    const barH = isMini ? 6.0 : isLarge ? 10.5 : 8.0;
+    drawVectorCode128OnPdf(doc, sticker.barcodeValue, cellX + barPadX, curY, barW, barH);
+    curY += barH + (isMini ? 2.0 : 2.5);
+
+    // Human-readable Code
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(isMini ? 5.2 : isLarge ? 7.2 : 6.2);
+    doc.text(sticker.barcodeValue, centerX, curY, { align: 'center' });
+    curY += isMini ? 1.8 : 2.3;
+
+    // Optional Batch / Expiry / Shelf Footer
+    if ((config.showBatchAndExpiry || config.showShelfLocation) && curY <= cellY + gridSpec.cellH - 1.2) {
+      const metaParts: string[] = [];
+      if (config.showBatchAndExpiry && sticker.batchNumber) {
+        metaParts.push(`B:${sticker.batchNumber}`);
+      }
+      if (config.showBatchAndExpiry && sticker.expiryDate) {
+        metaParts.push(`EXP:${sticker.expiryDate}`);
+      }
+      if (config.showShelfLocation && sticker.shelfLocation && !isMini) {
+        metaParts.push(sticker.shelfLocation);
+      }
+      if (metaParts.length > 0) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(isMini ? 4.2 : 4.8);
+        doc.text(metaParts.join(' | ').slice(0, isMini ? 24 : 34), centerX, curY, {
+          align: 'center',
+        });
+      }
+    }
+
+    void pageIndex;
+  });
+
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  const fileName = `Zahid_Barcode_Sheet_${config.layout}_${dateStamp}.pdf`;
+  doc.save(fileName);
+  return { fileName, totalStickers: expandedStickers.length };
+}
+
 
 
 

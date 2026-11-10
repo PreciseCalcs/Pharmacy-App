@@ -20,7 +20,8 @@ import {
   Baby,
   ShoppingBag,
   Sparkles,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Barcode
 } from 'lucide-react';
 import { DosageForm, MedicineCategory, MedicineItem } from '../types/pharmacy';
 import {
@@ -58,6 +59,7 @@ interface SpreadsheetViewProps {
   onOpenMedicineModal: (med?: MedicineItem) => void;
   onOpenScanner: () => void;
   onOpenPrintLabel: (med: MedicineItem) => void;
+  onOpenBarcodeStudio?: (med?: MedicineItem) => void;
   canEdit: boolean;
   externalStockFilter?: InventoryStockFilter | null;
   onExternalFilterConsumed?: () => void;
@@ -70,6 +72,7 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
   onOpenMedicineModal,
   onOpenScanner,
   onOpenPrintLabel,
+  onOpenBarcodeStudio,
   canEdit,
   externalStockFilter,
   onExternalFilterConsumed,
@@ -247,11 +250,23 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
           {/* Scanner Button */}
           <button
             onClick={onOpenScanner}
-            className="px-3 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition"
+            className="px-3 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition cursor-pointer"
           >
             <Camera className="w-4 h-4 text-emerald-600" />
             <span>Scan Camera</span>
           </button>
+
+          {/* Barcode Generator Studio Button */}
+          {onOpenBarcodeStudio && (
+            <button
+              onClick={() => onOpenBarcodeStudio()}
+              className="px-3 py-2 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+              title="Open Barcode Generator & Label Studio (Ctrl+B)"
+            >
+              <Barcode className="w-4 h-4 text-emerald-700" />
+              <span>Barcode Studio</span>
+            </button>
+          )}
 
           {/* Export Menu */}
           <button
@@ -475,8 +490,17 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
                             </span>
                           )}
                         </div>
-                        <div className="text-[10px] text-slate-500 font-mono">
-                          {m.genericName} &bull; {m.strength}
+                        <div className="text-[10px] text-slate-500 font-mono flex items-center gap-2">
+                          <span>{m.genericName} &bull; {m.strength}</span>
+                          <button
+                            type="button"
+                            onClick={() => onOpenPrintLabel(m)}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 border border-slate-200 text-[9px] font-mono font-bold transition cursor-pointer"
+                            title="Click to generate barcode or print sticker"
+                          >
+                            <Barcode className="w-2.5 h-2.5 text-emerald-700" />
+                            <span>{m.barcode || m.sku}</span>
+                          </button>
                         </div>
                       </td>
 

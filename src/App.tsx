@@ -23,7 +23,8 @@ import {
   Wallet,
   Truck,
   Calculator,
-  RefreshCw
+  RefreshCw,
+  Barcode
 } from 'lucide-react';
 import { 
   ConnectionStatus, 
@@ -47,6 +48,7 @@ import { DashboardView } from './components/DashboardView';
 import { PosView } from './components/PosView';
 import { GallaClosingView } from './components/GallaClosingView';
 import { SpreadsheetView, InventoryStockFilter } from './components/SpreadsheetView';
+import { BarcodeStudioView } from './components/BarcodeStudioView';
 import { CriticalStockView } from './components/CriticalStockView';
 import { CreditKhataView } from './components/CreditKhataView';
 import { SupplierKhataView } from './components/SupplierKhataView';
@@ -95,6 +97,7 @@ export default function App() {
   const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
   const [isPrintLabelOpen, setIsPrintLabelOpen] = useState(false);
   const [medicineForLabel, setMedicineForLabel] = useState<MedicineItem | null>(null);
+  const [initialBarcodeMedicine, setInitialBarcodeMedicine] = useState<MedicineItem | null>(null);
   const [isLinkCodeModalOpen, setIsLinkCodeModalOpen] = useState(false);
   const [unrecognizedCode, setUnrecognizedCode] = useState('');
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
@@ -270,6 +273,14 @@ export default function App() {
           setIsMobileMenuOpen(false);
           soundService.click();
           showToast('⚡ Medicine & Product Stock (Ctrl+I)', 'success');
+          return;
+        }
+        if (key === 'b') {
+          e.preventDefault();
+          setActiveTab('barcodes');
+          setIsMobileMenuOpen(false);
+          soundService.click();
+          showToast('⚡ Barcode Generator & Label Studio (Ctrl+B)', 'success');
           return;
         }
         if (key === 's') {
@@ -466,6 +477,8 @@ export default function App() {
         return 'Daily Galla closing';
       case 'inventory':
         return 'Medicine stock';
+      case 'barcodes':
+        return 'Barcode generator';
       case 'critical_stock':
         return 'Critical Stock Alerts';
       case 'khata':
@@ -669,6 +682,28 @@ export default function App() {
                   </div>
                   <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.2 rounded border border-current">
                     ^I
+                  </kbd>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setActiveTab('barcodes');
+                    setIsMobileMenuOpen(false);
+                    soundService.click();
+                  }}
+                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
+                    activeTab === 'barcodes'
+                      ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
+                      : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
+                  }`}
+                  title="Barcode Generator & Label Studio (Ctrl+B)"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Barcode className="w-4 h-4 text-emerald-400" />
+                    <span>Barcode generator</span>
+                  </div>
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.2 rounded border border-current">
+                    ^B
                   </kbd>
                 </button>
 
@@ -1111,9 +1146,34 @@ export default function App() {
                 setMedicineForLabel(med);
                 setIsPrintLabelOpen(true);
               }}
+              onOpenBarcodeStudio={(med) => {
+                if (med) setInitialBarcodeMedicine(med);
+                setActiveTab('barcodes');
+                soundService.click();
+              }}
               canEdit={currentUser.role === 'owner' || currentUser.role === 'pharmacist'}
               externalStockFilter={externalInventoryFilter}
               onExternalFilterConsumed={() => setExternalInventoryFilter(null)}
+            />
+          )}
+
+          {activeTab === 'barcodes' && (
+            <BarcodeStudioView
+              medicines={medicines}
+              pharmacyDetails={pharmacyDetails}
+              canEdit={currentUser.role === 'owner' || currentUser.role === 'pharmacist'}
+              initialSelectedMedicine={initialBarcodeMedicine}
+              onInitialMedicineConsumed={() => setInitialBarcodeMedicine(null)}
+              onUpdateMedicine={async (id, updates) => {
+                const updated = await syncEngine.updateMedicine(id, updates);
+                setMedicines(syncEngine.getMedicines());
+                return updated;
+              }}
+              onAddMedicine={async (item) => {
+                const added = await syncEngine.addMedicine(item);
+                setMedicines(syncEngine.getMedicines());
+                return added;
+              }}
             />
           )}
 
@@ -1241,6 +1301,13 @@ export default function App() {
         isOpen={isPrintLabelOpen}
         onClose={() => setIsPrintLabelOpen(false)}
         medicine={medicineForLabel}
+        onOpenInBarcodeStudio={(med) => {
+          setInitialBarcodeMedicine(med);
+          setActiveTab('barcodes');
+        }}
+        onMedicineUpdated={() => {
+          setMedicines(syncEngine.getMedicines());
+        }}
       />
 
       <LinkCodeModal
@@ -1293,6 +1360,7 @@ export default function App() {
                   {[
                     { keys: ['Ctrl', 'P'], alt: 'Alt + P', desc: 'Point of Sale (POS Register)', tab: 'pos' },
                     { keys: ['Ctrl', 'I'], alt: 'Alt + I', desc: 'Medicine Stock & Inventory', tab: 'inventory' },
+                    { keys: ['Ctrl', 'B'], alt: 'Alt + B', desc: 'Barcode Generator & Label Studio', tab: 'barcodes' },
                     { keys: ['Ctrl', 'S'], alt: 'Alt + S', desc: 'Pharmacy Settings (Owner)', tab: 'settings' },
                     { keys: ['Ctrl', 'O'], alt: 'Alt + O', desc: 'Overview Dashboard', tab: 'overview' },
                     { keys: ['Ctrl', 'K'], alt: 'Alt + K', desc: 'Credit Khata Customer Ledger', tab: 'khata' },
