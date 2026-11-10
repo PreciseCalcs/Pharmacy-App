@@ -2,6 +2,12 @@ import { PharmacyDetails, PrintFormat, SaleTransaction, ZAHID_PHARMACY_DETAILS }
 import { formatDateTime } from './dates';
 import { syncEngine } from '../services/syncEngine';
 
+export const DEFAULT_URDU_REFUND_POLICY =
+  'فروخت شدہ ادویات 3 دن کے اندر اصل کمپیوٹرائزڈ رسید کے ساتھ واپس یا تبدیل ہو سکتی ہیں۔ فریج والی ادویات، کھلے پتے اور سیرپ واپس نہیں ہوں گے۔';
+
+export const RECEIPT_MARKETING_FOOTER =
+  'For POS & Inventory Software, Contact: 0321-6336959 | 0306-7617080';
+
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -118,6 +124,9 @@ export function generateReceiptHtml(
   const barcodeHeight = isThermal58 ? 30 : isA4 ? 44 : 36;
   const barcodeSvg = generateInvoiceBarcodeSvg(txn.invoiceNumber, barcodeHeight);
 
+  const urduRefundText =
+    details.urduRefundPolicy?.trim() || DEFAULT_URDU_REFUND_POLICY;
+
   const itemsHtml = txn.items
     .map((item, idx) => {
       const unitLabel = item.unitType === 'loose' ? 'loose' : 'pack';
@@ -215,21 +224,30 @@ export function generateReceiptHtml(
         </div>
       </div>
 
-      <!-- Scannable Unique Receipt Barcode for Instant Counter Return / Refund -->
+      <!-- Scannable Unique Receipt Barcode -->
       <div style="text-align: center; border-top: 1px dashed #64748b; padding: 7px 0 5px 0; margin-bottom: 4px;">
         ${barcodeSvg}
         <div style="font-size: 0.85em; font-weight: 800; letter-spacing: 1.5px; margin-top: 3px; color: #0f172a;">
           *${escapeHtml(txn.invoiceNumber)}*
         </div>
-        <div style="font-size: 0.75em; color: #475569; margin-top: 1px;">
-          Scan receipt barcode or enter Invoice # at POS for Return/Exchange
-        </div>
       </div>
 
-      <div style="text-align: center; border-top: 1px dashed #64748b; padding-top: 6px; font-size: 0.85em;">
-        <div style="font-weight: 700; margin-bottom: 2px;">${escapeHtml(details.tagline)}</div>
-        <div style="color: #475569; margin-bottom: 4px;">${escapeHtml(details.thankYouMessage)}</div>
-        <div style="font-size: 0.8em; color: #64748b;">PocketBase Single-Binary POS Engine • Computerized Record</div>
+      <!-- Urdu Customer Refund & Exchange Policy Instructions -->
+      <div dir="rtl" style="text-align: center; border-top: 1px dashed #64748b; padding: 5px 4px; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; font-size: 0.88em; line-height: 1.5; color: #0f172a; background: #f8fafc; border-radius: 4px; margin-bottom: 5px;">
+        <div style="font-weight: 800; margin-bottom: 1px;">ہدایات برائے واپسی و تبدیلی:</div>
+        <div style="font-weight: 600; color: #1e293b;">${escapeHtml(urduRefundText)}</div>
+      </div>
+
+      <!-- Store Tagline & Software Marketing Footer -->
+      <div style="text-align: center; border-top: 1px dashed #64748b; padding-top: 5px; font-size: 0.85em;">
+        <div style="font-weight: 700; margin-bottom: 2px;">${escapeHtml(
+          !details.tagline || details.tagline === 'Your Trusted Health & Community Pharmacy'
+            ? 'Wishing you speedy recovery & good health'
+            : details.tagline
+        )}</div>
+        <div style="margin-top: 4px; padding: 3px 5px; border-top: 1px dotted #94a3b8; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; font-size: 0.86em; font-weight: 700; color: #0f172a;">
+          ${escapeHtml(RECEIPT_MARKETING_FOOTER)}
+        </div>
       </div>
     </div>
   `;

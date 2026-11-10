@@ -150,7 +150,16 @@ export class PharmacySyncEngine {
       // 4. Load Settings
       const savedSettings = localStorage.getItem(SETTINGS_STORAGE_KEY);
       if (savedSettings) {
-        this.pharmacyDetails = { ...DEFAULT_PHARMACY_DETAILS, ...JSON.parse(savedSettings) };
+        const parsedSettings = JSON.parse(savedSettings) as Partial<PharmacyDetails>;
+        if (
+          !parsedSettings.tagline ||
+          parsedSettings.tagline === 'Your Trusted Health & Community Pharmacy'
+        ) {
+          parsedSettings.tagline = DEFAULT_PHARMACY_DETAILS.tagline;
+        }
+        parsedSettings.marketingFooter = DEFAULT_PHARMACY_DETAILS.marketingFooter;
+        this.pharmacyDetails = { ...DEFAULT_PHARMACY_DETAILS, ...parsedSettings };
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.pharmacyDetails));
       } else {
         this.pharmacyDetails = { ...DEFAULT_PHARMACY_DETAILS };
         localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this.pharmacyDetails));
@@ -172,10 +181,52 @@ export class PharmacySyncEngine {
         this.activeCounter = this.counters[0]?.name || 'Main Counter';
       }
 
-      // 6. Load Khata Customers
+      // 6. Load Khata Customers (and backfill itemized purchase details on existing credit entries)
       const savedKhata = localStorage.getItem(KHATA_STORAGE_KEY);
       if (savedKhata) {
-        this.khataCustomers = JSON.parse(savedKhata);
+        const parsedKhata = JSON.parse(savedKhata) as CustomerKhata[];
+        let khataMigrated = false;
+        const seedEntriesByInv = new Map<string, KhataEntry>();
+        INITIAL_KHATA_CUSTOMERS.forEach((sc) =>
+          sc.history.forEach((se) => {
+            if (se.invoiceNumber && se.items?.length) {
+              seedEntriesByInv.set(se.invoiceNumber, se);
+            }
+          })
+        );
+
+        parsedKhata.forEach((cust) => {
+          cust.history.forEach((entry) => {
+            if ((entry.type === 'sale' || entry.type === 'refund') && (!entry.items || entry.items.length === 0) && entry.invoiceNumber) {
+              const matchingSale = this.sales.find((s) => s.invoiceNumber === entry.invoiceNumber);
+              if (matchingSale && matchingSale.items?.length) {
+                entry.items = matchingSale.items.map((it) => ({
+                  medicineId: it.medicineId,
+                  medicineName: it.medicineName,
+                  quantity: it.quantity,
+                  unitType: it.unitType,
+                  pricePerUnit: it.pricePerUnit,
+                  subtotal: it.subtotal,
+                }));
+                if (!entry.counterName && matchingSale.counterName) {
+                  entry.counterName = matchingSale.counterName;
+                }
+                khataMigrated = true;
+              } else {
+                const seedMatch = seedEntriesByInv.get(entry.invoiceNumber);
+                if (seedMatch?.items) {
+                  entry.items = [...seedMatch.items];
+                  khataMigrated = true;
+                }
+              }
+            }
+          });
+        });
+
+        this.khataCustomers = parsedKhata;
+        if (khataMigrated) {
+          localStorage.setItem(KHATA_STORAGE_KEY, JSON.stringify(this.khataCustomers));
+        }
       } else {
         this.khataCustomers = [...INITIAL_KHATA_CUSTOMERS];
         localStorage.setItem(KHATA_STORAGE_KEY, JSON.stringify(this.khataCustomers));
@@ -918,6 +969,15 @@ export class PharmacySyncEngine {
         );
       }
 
+      const orderItemsSummary = items.map((it) => ({
+        medicineId: it.medicineId,
+        medicineName: it.medicineName,
+        quantity: it.quantity,
+        unitType: it.unitType,
+        pricePerUnit: it.pricePerUnit,
+        subtotal: it.subtotal,
+      }));
+
       if (targetCustomer) {
         targetCustomer.balanceDue += totalAmount;
         targetCustomer.updatedAt = new Date().toISOString();
@@ -928,8 +988,10 @@ export class PharmacySyncEngine {
           description: `Credit sale · ${invoiceNumber}`,
           amount: totalAmount,
           paymentMethod: 'Credit',
+          counterName: counterName || this.activeCounter,
           date: new Date().toISOString(),
           note: notes,
+          items: orderItemsSummary,
         });
         this.saveKhata();
         this.enqueueOutbox('RECORD_KHATA_SALE', {
@@ -952,7 +1014,10 @@ export class PharmacySyncEngine {
               description: `Credit sale · ${invoiceNumber}`,
               amount: totalAmount,
               paymentMethod: 'Credit',
+              counterName: counterName || this.activeCounter,
               date: new Date().toISOString(),
+              note: notes,
+              items: orderItemsSummary,
             },
           ],
         };
@@ -1097,8 +1162,17 @@ export class PharmacySyncEngine {
           description: `Sale Refund · ${txn.invoiceNumber} (${cleanReason})`,
           amount: txn.totalAmount,
           paymentMethod: 'Credit Refund',
+          counterName: txn.counterName || this.activeCounter,
           date: nowIso,
           note: cleanReason,
+          items: txn.items.map((it) => ({
+            medicineId: it.medicineId,
+            medicineName: it.medicineName,
+            quantity: it.quantity,
+            unitType: it.unitType,
+            pricePerUnit: it.pricePerUnit,
+            subtotal: it.subtotal,
+          })),
         });
         this.saveKhata();
         this.enqueueOutbox('RECORD_KHATA_PAYMENT', {

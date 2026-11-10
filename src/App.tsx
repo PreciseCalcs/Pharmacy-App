@@ -22,7 +22,8 @@ import {
   ShieldAlert,
   Wallet,
   Truck,
-  Calculator
+  Calculator,
+  RefreshCw
 } from 'lucide-react';
 import { 
   ConnectionStatus, 
@@ -112,7 +113,10 @@ export default function App() {
     scanId: number;
   } | null>(null);
 
-  // PocketBase Connection
+  // PocketBase Connection & Auto-Reconnect / Outbox Sync Progress
+  const RECONNECT_INTERVAL_SECONDS = 15;
+  const [reconnectCountdown, setReconnectCountdown] = useState<number>(RECONNECT_INTERVAL_SECONDS);
+  const [isReconnectingSync, setIsReconnectingSync] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
     isConnected: true,
     isPocketBaseLive: false,
@@ -121,8 +125,14 @@ export default function App() {
     pendingSyncCount: 0,
   });
 
-  const refreshHealth = useCallback(async () => {
+  const refreshHealth = useCallback(async (isAutoRetry = false) => {
+    if (isAutoRetry) {
+      setIsReconnectingSync(true);
+    }
     const health = await checkPocketBaseHealth();
+    if (health.isPocketBaseLive && syncEngine.getOutboxCount() > 0) {
+      await syncEngine.syncWithPocketBase();
+    }
     setConnectionStatus({
       isConnected: health.isConnected,
       isPocketBaseLive: health.isPocketBaseLive,
@@ -130,6 +140,12 @@ export default function App() {
       lastChecked: health.lastChecked,
       pendingSyncCount: syncEngine.getOutboxCount(),
     });
+    if (isAutoRetry) {
+      setTimeout(() => {
+        setIsReconnectingSync(false);
+        setReconnectCountdown(RECONNECT_INTERVAL_SECONDS);
+      }, 700);
+    }
   }, []);
 
   const showToast = useCallback((message: string, type: 'success' | 'warn') => {
@@ -158,9 +174,9 @@ export default function App() {
     [currentUser.role, showToast]
   );
   
-  // SyncEngine Subscription
+  // SyncEngine Subscription & 1-Second Reconnect/Sync Countdown Ticker
   useEffect(() => {
-    refreshHealth();
+    refreshHealth(false);
     const unsub = syncEngine.subscribe(() => {
       setMedicines(syncEngine.getMedicines());
       setSales(syncEngine.getSales());
@@ -171,16 +187,22 @@ export default function App() {
       setPharmacyDetails(syncEngine.getPharmacyDetails());
       setCounters(syncEngine.getCounters());
       setActiveCounter(syncEngine.getActiveCounter());
-      refreshHealth();
+      refreshHealth(false);
     });
 
-    const timer = setInterval(() => {
-      refreshHealth();
-    }, 15000);
+    const countdownTimer = setInterval(() => {
+      setReconnectCountdown((prev) => {
+        if (prev <= 1) {
+          refreshHealth(true);
+          return RECONNECT_INTERVAL_SECONDS;
+        }
+        return prev - 1;
+      });
+    }, 1000);
 
     return () => {
       unsub();
-      clearInterval(timer);
+      clearInterval(countdownTimer);
     };
   }, [refreshHealth]);
 
@@ -826,11 +848,86 @@ export default function App() {
           </div>
 
           <button
-            onClick={() => setActiveTab('settings')}
-            className="w-full py-1 px-2 rounded-lg bg-[#0c3927] hover:bg-[#114932] border border-emerald-900/80 text-[10px] text-emerald-200/90 flex items-center justify-center gap-1.5 transition cursor-pointer"
+            onClick={() => {
+              refreshHealth(true);
+              setActiveTab('settings');
+            }}
+            className="w-full py-1.5 px-2.5 rounded-xl bg-[#0c3927] hover:bg-[#114932] border border-emerald-900/80 text-[10px] text-emerald-200/90 flex flex-col gap-1 transition cursor-pointer"
+            title={
+              connectionStatus.isPocketBaseLive
+                ? 'PocketBase connected and synced'
+                : `Auto-reconnecting to PocketBase in ${reconnectCountdown}s (${connectionStatus.pendingSyncCount} offline transactions queued)`
+            }
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${connectionStatus.isPocketBaseLive ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-            <span>{connectionStatus.isPocketBaseLive ? 'PocketBase Live' : 'PocketBase not connected'}</span>
+            <div className="w-full flex items-center justify-between gap-1.5">
+              <div className="flex items-center gap-1.5 min-w-0">
+                {isReconnectingSync ? (
+                  <RefreshCw className="w-3 h-3 text-amber-400 animate-spin shrink-0" />
+                ) : (
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                      connectionStatus.isPocketBaseLive ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'
+                    }`}
+                  />
+                )}
+                <span className="truncate font-semibold">
+                  {connectionStatus.isPocketBaseLive
+                    ? 'PocketBase Live'
+                    : isReconnectingSync
+                    ? connectionStatus.pendingSyncCount > 0
+                      ? `Syncing ${connectionStatus.pendingSyncCount} offline...`
+                      : 'Reconnecting...'
+                    : 'PocketBase not connected'}
+                </span>
+              </div>
+
+              {(!connectionStatus.isPocketBaseLive || connectionStatus.pendingSyncCount > 0) && (
+                <span className="font-mono tabular-nums text-[9px] font-bold text-amber-300/95 shrink-0">
+                  {isReconnectingSync ? 'Sync' : `${reconnectCountdown}s`}
+                </span>
+              )}
+            </div>
+
+            {(!connectionStatus.isPocketBaseLive || connectionStatus.pendingSyncCount > 0) && (
+              <div className="w-full space-y-1">
+                <div className="w-full h-1 rounded-full bg-[#051810] overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-700 ease-linear ${
+                      isReconnectingSync
+                        ? 'w-full bg-emerald-400 animate-pulse'
+                        : [
+                            'w-full',
+                            'w-[93%]',
+                            'w-[87%]',
+                            'w-[80%]',
+                            'w-[73%]',
+                            'w-[67%]',
+                            'w-[60%]',
+                            'w-[53%]',
+                            'w-[47%]',
+                            'w-[40%]',
+                            'w-[33%]',
+                            'w-[27%]',
+                            'w-[20%]',
+                            'w-[14%]',
+                            'w-[8%]',
+                            'w-[6%]',
+                          ][Math.max(0, Math.min(15, reconnectCountdown))] + ' bg-amber-400/90'
+                    }`}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-[9px] text-emerald-300/75 font-mono tabular-nums">
+                  <span>
+                    {connectionStatus.pendingSyncCount > 0
+                      ? `${connectionStatus.pendingSyncCount} pending sync`
+                      : 'Offline queue ready'}
+                  </span>
+                  <span>
+                    {isReconnectingSync ? 'Attempting sync...' : `Retry in ${reconnectCountdown}s`}
+                  </span>
+                </div>
+              </div>
+            )}
           </button>
         </div>
       </aside>
@@ -1035,8 +1132,13 @@ export default function App() {
           {activeTab === 'khata' && (
             <CreditKhataView
               customers={khataCustomers}
+              sales={sales}
               onCustomerUpdated={() => {
                 setKhataCustomers(syncEngine.getKhataCustomers());
+              }}
+              onSelectInvoice={(txn) => {
+                setSelectedInvoice(txn);
+                setIsInvoiceModalOpen(true);
               }}
             />
           )}

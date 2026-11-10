@@ -5,6 +5,8 @@ import {
   ShortBookEntry,
   SupplierAccount,
   GallaClosingRecord,
+  CustomerKhata,
+  KhataOrderItem,
   ZAHID_PHARMACY_DETAILS,
 } from '../types/pharmacy';
 import { formatDateTime } from '../utils/dates';
@@ -950,6 +952,269 @@ export function generateGallaClosingPDF(record: GallaClosingRecord): void {
 
   doc.save(`${record.closingNumber}_Galla_Reconciliation.pdf`);
 }
+
+export function generateCustomerKhataPDF(
+  customer: CustomerKhata,
+  options: { autoDownload?: boolean } = { autoDownload: true }
+): { blob: Blob; fileName: string } {
+  const details = syncEngine.getPharmacyDetails() || ZAHID_PHARMACY_DETAILS;
+  const allSales = syncEngine.getSales();
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  let y = 16;
+
+  // Store Header
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.text(details.name, pageWidth / 2, y, { align: 'center' });
+
+  y += 5.5;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text(`${details.address}, ${details.city}`, pageWidth / 2, y, { align: 'center' });
+
+  y += 5;
+  doc.setFontSize(8.5);
+  doc.text(
+    `Drug Licence: ${details.drugLicenceNumber}${details.ntnNumber ? ` | NTN: ${details.ntnNumber}` : ''} | Phone: ${details.phone}`,
+    pageWidth / 2,
+    y,
+    { align: 'center' }
+  );
+
+  if (details.tagline) {
+    y += 4.5;
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8.5);
+    doc.text(details.tagline, pageWidth / 2, y, { align: 'center' });
+  }
+
+  y += 5;
+  doc.setLineWidth(0.5);
+  doc.line(14, y, pageWidth - 14, y);
+
+  y += 8;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13.5);
+  doc.text('CUSTOMER CREDIT KHATA STATEMENT & ORDER HISTORY', 14, y);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(`Statement Date: ${new Date().toLocaleString('en-PK')}`, pageWidth - 14, y, {
+    align: 'right',
+  });
+
+  // Calculate Totals
+  const totalCreditPurchases = customer.history
+    .filter((h) => h.type === 'sale')
+    .reduce((sum, h) => sum + h.amount, 0);
+  const totalPaymentsAndRefunds = customer.history
+    .filter((h) => h.type === 'payment' || h.type === 'refund')
+    .reduce((sum, h) => sum + h.amount, 0);
+  const creditInvoicesCount = customer.history.filter((h) => h.type === 'sale').length;
+
+  y += 6;
+  // Customer & Balance Summary Card
+  doc.setFillColor(240, 253, 244);
+  doc.rect(14, y, pageWidth - 28, 26, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.text(`Customer: ${customer.name}`, 18, y + 7);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(`Phone / WhatsApp: ${customer.phone || 'N/A'}`, 18, y + 13.5);
+  doc.text(`Address: ${customer.address || 'Local Customer'}`, 18, y + 20);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(
+    `Total Credit Purchases (${creditInvoicesCount} bills): ${formatPKR(totalCreditPurchases)}`,
+    pageWidth - 18,
+    y + 7,
+    { align: 'right' }
+  );
+  doc.text(
+    `Total Payments Received: ${formatPKR(totalPaymentsAndRefunds)}`,
+    pageWidth - 18,
+    y + 13.5,
+    { align: 'right' }
+  );
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text(
+    `NET BALANCE DUE: ${formatPKR(customer.balanceDue)}`,
+    pageWidth - 18,
+    y + 21,
+    { align: 'right' }
+  );
+
+  y += 33;
+
+  const drawLedgerTableHeader = (yPos: number) => {
+    doc.setFillColor(226, 232, 240);
+    doc.rect(14, yPos, pageWidth - 28, 7.5, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('Date & Time', 16, yPos + 5.2);
+    doc.text('Invoice # / Type', 50, yPos + 5.2);
+    doc.text('Purchased Medicines & Order Details', 86, yPos + 5.2);
+    doc.text('Credit Bill (+)', 164, yPos + 5.2, { align: 'right' });
+    doc.text('Paid (-)', pageWidth - 16, yPos + 5.2, { align: 'right' });
+  };
+
+  drawLedgerTableHeader(y);
+  y += 12;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+
+  if (customer.history.length === 0) {
+    doc.text('No credit orders or payment entries recorded yet.', 16, y);
+    y += 10;
+  } else {
+    customer.history.forEach((entry) => {
+      // Resolve items from entry.items or matching SaleTransaction
+      let resolvedItems: KhataOrderItem[] = entry.items || [];
+      if (resolvedItems.length === 0 && entry.invoiceNumber) {
+        const matchedSale = allSales.find((s) => s.invoiceNumber === entry.invoiceNumber);
+        if (matchedSale?.items?.length) {
+          resolvedItems = matchedSale.items.map((it) => ({
+            medicineId: it.medicineId,
+            medicineName: it.medicineName,
+            quantity: it.quantity,
+            unitType: it.unitType,
+            pricePerUnit: it.pricePerUnit,
+            subtotal: it.subtotal,
+          }));
+        }
+      }
+
+      const itemLines: string[] = [];
+      if (resolvedItems.length > 0) {
+        resolvedItems.forEach((it) => {
+          const unitLabel = it.unitType === 'pack' ? (it.quantity > 1 ? 'Packs' : 'Pack') : 'Loose';
+          itemLines.push(
+            `• ${it.medicineName} (${it.quantity} ${unitLabel} x Rs.${it.pricePerUnit} = Rs.${it.subtotal})`
+          );
+        });
+        if (entry.note) {
+          itemLines.push(`Note: ${entry.note}`);
+        }
+      } else {
+        itemLines.push(entry.description + (entry.note ? ` (${entry.note})` : ''));
+      }
+
+      // Wrap lines to fit column width (approx 52mm)
+      const wrappedDetails: string[] = [];
+      itemLines.forEach((line) => {
+        const split = doc.splitTextToSize(line, 54) as string[];
+        wrappedDetails.push(...split);
+      });
+
+      const rowHeight = Math.max(7, wrappedDetails.length * 4.2 + 2.5);
+
+      if (y + rowHeight > 272) {
+        doc.addPage();
+        y = 18;
+        drawLedgerTableHeader(y);
+        y += 12;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+      }
+
+      const dateStr = formatDateTime(entry.date);
+      const typeOrInvoice =
+        entry.type === 'sale'
+          ? entry.invoiceNumber || 'Credit Bill'
+          : entry.type === 'refund'
+          ? `Refund (${entry.invoiceNumber || ''})`
+          : `Payment (${entry.paymentMethod || 'Cash'})`;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text(dateStr.substring(0, 19), 16, y);
+
+      doc.setFont('helvetica', entry.type === 'sale' ? 'bold' : 'normal');
+      doc.text(typeOrInvoice.substring(0, 20), 50, y);
+
+      doc.setFont('helvetica', 'normal');
+      wrappedDetails.forEach((wLine, idx) => {
+        doc.text(wLine, 86, y + idx * 4.1);
+      });
+
+      if (entry.type === 'sale') {
+        doc.setFont('helvetica', 'bold');
+        doc.text(`+ ${formatPKR(entry.amount)}`, 164, y, { align: 'right' });
+        doc.setFont('helvetica', 'normal');
+        doc.text('-', pageWidth - 16, y, { align: 'right' });
+      } else {
+        doc.setFont('helvetica', 'normal');
+        doc.text('-', 164, y, { align: 'right' });
+        doc.setFont('helvetica', 'bold');
+        doc.text(`- ${formatPKR(entry.amount)}`, pageWidth - 16, y, { align: 'right' });
+      }
+
+      const bottomLineY = y + Math.max(2, (wrappedDetails.length - 1) * 4.1) + 2.5;
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.2);
+      doc.line(14, bottomLineY, pageWidth - 14, bottomLineY);
+
+      y = bottomLineY + 5;
+    });
+  }
+
+  // Final Net Summary Footer Box
+  if (y > 250) {
+    doc.addPage();
+    y = 20;
+  }
+
+  y += 4;
+  doc.setFillColor(248, 250, 252);
+  doc.rect(14, y, pageWidth - 28, 22, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text(
+    `NET OUTSTANDING KHATA BALANCE PAYABLE TO ${details.name.toUpperCase()}:`,
+    18,
+    y + 8
+  );
+  doc.setFontSize(12);
+  doc.text(formatPKR(customer.balanceDue), pageWidth - 18, y + 8, { align: 'right' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text(
+    `Kindly clear your outstanding balance at your earliest convenience. Store Contact: ${details.phone}`,
+    18,
+    y + 15.5
+  );
+
+  if (details.marketingFooter) {
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'italic');
+    doc.text(details.marketingFooter, pageWidth / 2, 287, { align: 'center' });
+  }
+
+  const cleanName = customer.name.replace(/[^a-zA-Z0-9_-]/g, '_') || 'Customer';
+  const datePart = new Date().toISOString().slice(0, 10);
+  const fileName = `${cleanName}_Khata_Statement_${datePart}.pdf`;
+
+  if (options.autoDownload !== false) {
+    doc.save(fileName);
+  }
+
+  const blob = doc.output('blob');
+  return { blob, fileName };
+}
+
 
 
 

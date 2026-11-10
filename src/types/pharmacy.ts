@@ -244,6 +244,8 @@ export interface PharmacyDetails {
   logoUrl?: string;
   tagline: string;
   thankYouMessage: string;
+  urduRefundPolicy?: string;
+  marketingFooter?: string;
   pocketBaseUrl?: string;
 }
 
@@ -252,6 +254,15 @@ export interface PharmacyCounter {
   name: string;
   locationNote: string;
   isDefault?: boolean;
+}
+
+export interface KhataOrderItem {
+  medicineId?: string;
+  medicineName: string;
+  quantity: number;
+  unitType: 'pack' | 'loose';
+  pricePerUnit: number;
+  subtotal: number;
 }
 
 export interface KhataEntry {
@@ -264,6 +275,7 @@ export interface KhataEntry {
   counterName?: string;
   date: string;
   note?: string;
+  items?: KhataOrderItem[];
 }
 
 export interface CustomerKhata {
@@ -289,8 +301,12 @@ export const DEFAULT_PHARMACY_DETAILS: PharmacyDetails = {
   ownerTitle: 'Owner / Pharmacist',
   ownerPhone: '03067617080',
   ownerEmail: 'zahid.pharmacy.multan@gmail.com',
-  tagline: 'Your Trusted Health & Community Pharmacy',
-  thankYouMessage: 'Thank you for your visit. Medicines once sold can only be exchanged within 3 days with receipt under safe storage conditions.',
+  tagline: 'Wishing you speedy recovery & good health',
+  thankYouMessage: 'Thank you for your visit!',
+  urduRefundPolicy:
+    'فروخت شدہ ادویات 3 دن کے اندر اصل کمپیوٹرائزڈ رسید کے ساتھ واپس یا تبدیل ہو سکتی ہیں۔ فریج والی ادویات، کھلے پتے اور سیرپ واپس نہیں ہوں گے۔',
+  marketingFooter:
+    'For POS & Inventory Software, Contact: 0321-6336959 | 0306-7617080',
   pocketBaseUrl: 'http://127.0.0.1:8090',
 };
 
@@ -331,6 +347,16 @@ export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
         paymentMethod: 'Credit',
         counterName: 'Main Counter',
         date: '2026-11-08T08:15:00.000Z',
+        items: [
+          {
+            medicineId: 'med_augmentin_625',
+            medicineName: 'Augmentin 625mg',
+            quantity: 2,
+            unitType: 'pack',
+            pricePerUnit: 470,
+            subtotal: 940,
+          },
+        ],
       },
       {
         id: 'ent_03',
@@ -341,6 +367,32 @@ export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
         paymentMethod: 'Credit',
         counterName: 'Main Counter',
         date: '2026-11-07T14:20:00.000Z',
+        items: [
+          {
+            medicineId: 'med_panadol_500',
+            medicineName: 'Panadol 500mg',
+            quantity: 1,
+            unitType: 'pack',
+            pricePerUnit: 640,
+            subtotal: 640,
+          },
+          {
+            medicineId: 'med_risek_20',
+            medicineName: 'Risek 20mg Capsule',
+            quantity: 1,
+            unitType: 'pack',
+            pricePerUnit: 360,
+            subtotal: 360,
+          },
+          {
+            medicineId: 'med_glucophage_500',
+            medicineName: 'Glucophage 500mg',
+            quantity: 2,
+            unitType: 'pack',
+            pricePerUnit: 220,
+            subtotal: 440,
+          },
+        ],
       },
       {
         id: 'ent_04',
@@ -372,6 +424,16 @@ export const INITIAL_KHATA_CUSTOMERS: CustomerKhata[] = [
         paymentMethod: 'Credit',
         counterName: 'Counter 02',
         date: '2026-11-08T07:45:00.000Z',
+        items: [
+          {
+            medicineId: 'med_panadol_500',
+            medicineName: 'Panadol 500mg',
+            quantity: 1,
+            unitType: 'pack',
+            pricePerUnit: 640,
+            subtotal: 640,
+          },
+        ],
       },
       {
         id: 'ent_06',

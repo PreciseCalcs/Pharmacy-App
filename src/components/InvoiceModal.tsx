@@ -7,7 +7,11 @@ import {
   SaleTransaction,
   ZAHID_PHARMACY_DETAILS,
 } from '../types/pharmacy';
-import { generateReceiptHtml } from '../utils/receiptTemplate';
+import {
+  DEFAULT_URDU_REFUND_POLICY,
+  generateReceiptHtml,
+  RECEIPT_MARKETING_FOOTER,
+} from '../utils/receiptTemplate';
 import { formatDateTime } from '../utils/dates';
 import { formatPKR } from '../utils/pharmacyHelpers';
 import { syncEngine } from '../services/syncEngine';
@@ -103,6 +107,8 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
       ? liveTxn.customerPhone.replace(/[^0-9]/g, '')
       : '';
     const cleanPhone = phone.startsWith('0') ? `92${phone.slice(1)}` : phone;
+    const urduPolicy =
+      details.urduRefundPolicy?.trim() || DEFAULT_URDU_REFUND_POLICY;
 
     let text = `*${details.name}*\n`;
     text += `${details.address}, ${details.city}\n`;
@@ -132,7 +138,10 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
     text += `Payment: ${liveTxn.paymentMethod}\n`;
     text += `Receipt Barcode: *${liveTxn.invoiceNumber}*\n`;
     text += `--------------------------------\n`;
-    text += `Thank you for visiting ${details.name}!`;
+    text += `*ہدایات برائے واپسی و تبدیلی:*\n${urduPolicy}\n`;
+    text += `--------------------------------\n`;
+    text += `_Wishing you speedy recovery & good health_\n`;
+    text += `${RECEIPT_MARKETING_FOOTER}`;
 
     const encoded = encodeURIComponent(text);
     const url = cleanPhone
@@ -195,7 +204,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
               <button
                 key={fmt}
                 onClick={() => setPrintFormat(fmt)}
-                className={`px-2.5 py-1 rounded-md font-medium capitalize transition ${
+                className={`px-2.5 py-1 rounded-md font-medium capitalize transition cursor-pointer ${
                   printFormat === fmt
                     ? 'bg-emerald-600 text-white font-bold shadow-xs'
                     : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
@@ -211,7 +220,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
               <button
                 type="button"
                 onClick={() => setShowRefundPanel(!showRefundPanel)}
-                className={`px-2.5 py-1 rounded-md border font-bold flex items-center gap-1 transition ${
+                className={`px-2.5 py-1 rounded-md border font-bold flex items-center gap-1 transition cursor-pointer ${
                   showRefundPanel
                     ? 'bg-rose-600 text-white border-rose-600'
                     : 'bg-rose-50 border-rose-300 text-rose-800 hover:bg-rose-100'
@@ -224,7 +233,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
             )}
             <button
               onClick={handleWhatsAppShare}
-              className="px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 font-medium flex items-center gap-1"
+              className="px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 font-medium flex items-center gap-1 cursor-pointer"
               title="Share digital receipt on WhatsApp"
             >
               <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
@@ -321,7 +330,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
         <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
           <button
             onClick={onClose}
-            className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 text-xs font-semibold"
+            className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 text-xs font-semibold cursor-pointer"
           >
             Close
           </button>
@@ -329,7 +338,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({
           <div className="flex items-center gap-2">
             <button
               onClick={handlePrint}
-              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-600/30 transition"
+              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-600/30 transition cursor-pointer"
             >
               <Printer className="w-4 h-4" />
               <span>Print Invoice Receipt</span>
