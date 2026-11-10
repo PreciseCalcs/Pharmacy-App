@@ -478,22 +478,22 @@ export default function App() {
       )}
 
       {/* ============================================================== */}
-      {/* LEFT SIDEBAR: Matches Screenshot 1, 2, 3 Layout               */}
+      {/* LEFT SIDEBAR: Compact, zero-scrollbar layout for 768p laptops   */}
       {/* ============================================================== */}
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-64 bg-[#072418] text-slate-100 flex flex-col justify-between transition-transform duration-200 ease-in-out md:translate-x-0 ${
           isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="p-4 space-y-6 overflow-y-auto">
+        <div className="p-3.5 space-y-3.5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {/* 1. Brand Workspace Lockup */}
-          <div className="flex items-center gap-3 pt-1">
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0">
               {pharmacyDetails.logoUrl ? (
                 <img src={pharmacyDetails.logoUrl} alt="Logo" className="w-full h-full object-contain rounded-xl p-0.5" />
               ) : (
-                <div className="p-1.5">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-5 h-5 text-emerald-400">
+                <div className="p-1">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4 text-emerald-400">
                     <rect x="3" y="7" width="18" height="10" rx="5" transform="rotate(-45 12 12)" />
                     <line x1="8" y1="8" x2="16" y2="16" />
                   </svg>
@@ -505,7 +505,7 @@ export default function App() {
               <h1 className="font-bold text-sm text-white truncate leading-tight">
                 {pharmacyDetails.name}
               </h1>
-              <span className="text-[10px] uppercase font-semibold tracking-wider text-emerald-400/80 block mt-0.5">
+              <span className="text-[9px] uppercase font-semibold tracking-wider text-emerald-400/80 block">
                 Pharmacy Workspace
               </span>
             </div>
@@ -513,12 +513,12 @@ export default function App() {
 
           {/* 2. Active Counter Selector (Dropdown) */}
           <div className="relative">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300/60 block mb-1.5">
+            <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-300/60 block mb-1">
               Active Counter
             </span>
             <button
               onClick={() => setIsCounterDropdownOpen(!isCounterDropdownOpen)}
-              className="w-full px-3 py-2.5 rounded-xl bg-[#0d3424] hover:bg-[#12422e] border border-emerald-900/60 flex items-center justify-between text-xs font-semibold text-white transition"
+              className="w-full px-3 py-2 rounded-xl bg-[#0d3424] hover:bg-[#12422e] border border-emerald-900/60 flex items-center justify-between text-xs font-semibold text-white transition cursor-pointer"
             >
               <div className="flex items-center gap-2 truncate">
                 <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
@@ -529,12 +529,12 @@ export default function App() {
 
             {/* Counter Menu */}
             {isCounterDropdownOpen && (
-              <div className="absolute top-full left-0 right-0 mt-1.5 bg-[#0b2d1f] border border-emerald-800/80 rounded-xl shadow-xl z-50 overflow-hidden py-1 text-xs">
+              <div className="absolute top-full left-0 right-0 mt-1 bg-[#0b2d1f] border border-emerald-800/80 rounded-xl shadow-xl z-50 overflow-hidden py-1 text-xs">
                 {counters.map((c) => (
                   <button
                     key={c.id}
                     onClick={() => handleSelectCounter(c.name)}
-                    className={`w-full px-3 py-2 text-left flex items-center justify-between transition ${
+                    className={`w-full px-3 py-1.5 text-left flex items-center justify-between transition ${
                       activeCounter === c.name
                         ? 'bg-emerald-800/40 text-emerald-300 font-bold'
                         : 'text-slate-300 hover:bg-emerald-900/40'
@@ -546,28 +546,23 @@ export default function App() {
                 ))}
               </div>
             )}
-
-            <div className="flex items-center gap-1.5 text-[10px] text-emerald-300/60 mt-1.5 pl-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-              <span>Local preview data</span>
-            </div>
           </div>
 
           {/* 3. Navigation Sections */}
-          <div className="space-y-5">
+          <div className="space-y-3">
             {/* WORKSPACE */}
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300/60 block mb-2">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-300/60 block mb-1">
                 Workspace
               </span>
-              <div className="space-y-1 text-xs font-medium">
+              <div className="space-y-0.5 text-xs font-medium">
                 <button
                   onClick={() => {
                     setActiveTab('overview');
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
                     activeTab === 'overview'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
@@ -578,7 +573,7 @@ export default function App() {
                     <LayoutDashboard className="w-4 h-4" />
                     <span>Overview</span>
                   </div>
-                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.2 rounded border border-current">
                     ^O
                   </kbd>
                 </button>
@@ -589,7 +584,7 @@ export default function App() {
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
                     activeTab === 'pos'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
@@ -600,7 +595,7 @@ export default function App() {
                     <ShoppingCart className="w-4 h-4" />
                     <span>Point of sale</span>
                   </div>
-                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.2 rounded border border-current">
                     ^P
                   </kbd>
                 </button>
@@ -609,7 +604,7 @@ export default function App() {
                   onClick={() => {
                     handleNavigateTab('galla');
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
                     activeTab === 'galla'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
@@ -620,7 +615,7 @@ export default function App() {
                     <Calculator className="w-4 h-4 text-emerald-400" />
                     <span>Daily Galla closing</span>
                   </div>
-                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.2 rounded border border-current">
                     ^G
                   </kbd>
                 </button>
@@ -629,17 +624,17 @@ export default function App() {
 
             {/* MANAGE */}
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300/60 block mb-2">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-300/60 block mb-1">
                 Manage
               </span>
-              <div className="space-y-1 text-xs font-medium">
+              <div className="space-y-0.5 text-xs font-medium">
                 <button
                   onClick={() => {
                     setActiveTab('inventory');
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
                     activeTab === 'inventory'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
@@ -650,7 +645,7 @@ export default function App() {
                     <Package className="w-4 h-4" />
                     <span>Medicine stock</span>
                   </div>
-                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.2 rounded border border-current">
                     ^I
                   </kbd>
                 </button>
@@ -659,7 +654,7 @@ export default function App() {
                   onClick={() => {
                     handleNavigateTab('critical_stock');
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
                     activeTab === 'critical_stock'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
@@ -671,7 +666,7 @@ export default function App() {
                     <span>Critical stock</span>
                   </div>
                   {criticalStockCount > 0 && (
-                    <span className="bg-rose-500 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                    <span className="bg-rose-500 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full font-mono tabular-nums">
                       {criticalStockCount}
                     </span>
                   )}
@@ -683,7 +678,7 @@ export default function App() {
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
                     activeTab === 'khata'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
@@ -696,11 +691,11 @@ export default function App() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     {khataActiveCount > 0 && (
-                      <span className="bg-amber-400 text-slate-950 text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center">
+                      <span className="bg-amber-400 text-slate-950 text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center font-mono tabular-nums">
                         {khataActiveCount}
                       </span>
                     )}
-                    <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                    <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.2 rounded border border-current">
                       ^K
                     </kbd>
                   </div>
@@ -711,7 +706,7 @@ export default function App() {
                     onClick={() => {
                       handleNavigateTab('suppliers');
                     }}
-                    className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                    className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
                       activeTab === 'suppliers'
                         ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                         : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
@@ -724,11 +719,11 @@ export default function App() {
                     </div>
                     <div className="flex items-center gap-1.5">
                       {suppliersPayableCount > 0 && (
-                        <span className="bg-rose-500 text-white text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center">
+                        <span className="bg-rose-500 text-white text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center font-mono tabular-nums">
                           {suppliersPayableCount}
                         </span>
                       )}
-                      <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                      <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.2 rounded border border-current">
                         ^D
                       </kbd>
                     </div>
@@ -741,7 +736,7 @@ export default function App() {
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
                     activeTab === 'reports'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
@@ -752,7 +747,7 @@ export default function App() {
                     <BarChart3 className="w-4 h-4" />
                     <span>Sales reports</span>
                   </div>
-                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.2 rounded border border-current">
                     ^R
                   </kbd>
                 </button>
@@ -760,7 +755,7 @@ export default function App() {
                 {currentUser.role === 'owner' && (
                   <button
                     onClick={() => handleNavigateTab('audit', '⚡ Monthly Profit & Expense Audit')}
-                    className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                    className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
                       activeTab === 'audit'
                         ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                         : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
@@ -779,17 +774,17 @@ export default function App() {
 
             {/* STORE */}
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300/60 block mb-2">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-300/60 block mb-1">
                 Store
               </span>
-              <div className="space-y-1 text-xs font-medium">
+              <div className="space-y-0.5 text-xs font-medium">
                 <button
                   onClick={() => {
                     setActiveTab('settings');
                     setIsMobileMenuOpen(false);
                     soundService.click();
                   }}
-                  className={`w-full px-3 py-2 rounded-xl flex items-center justify-between transition ${
+                  className={`w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between transition cursor-pointer ${
                     activeTab === 'settings'
                       ? 'bg-[#e2f5ec] text-[#06261a] font-bold shadow-2xs'
                       : 'text-emerald-100/90 hover:bg-[#0c3927] hover:text-white'
@@ -800,7 +795,7 @@ export default function App() {
                     <Settings className="w-4 h-4" />
                     <span>Pharmacy settings</span>
                   </div>
-                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.5 rounded border border-current">
+                  <kbd className="text-[9px] font-mono opacity-50 font-normal px-1 py-0.2 rounded border border-current">
                     ^S
                   </kbd>
                 </button>
@@ -809,23 +804,21 @@ export default function App() {
           </div>
         </div>
 
-        {/* 4. Bottom Profile & PocketBase Pill (Screenshot 1, 2, 3) */}
-        <div className="p-3.5 border-t border-emerald-900/60 bg-[#062016]">
-          <div className="flex items-center justify-between mb-2">
+        {/* 4. Bottom Profile & PocketBase Pill */}
+        <div className="p-3 border-t border-emerald-900/60 bg-[#062016]">
+          <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-full bg-emerald-500/20 text-emerald-300 font-bold text-xs flex items-center justify-center border border-emerald-500/30">
+              <div className="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-300 font-bold text-[11px] flex items-center justify-center border border-emerald-500/30">
                 {userInitials}
               </div>
-              <div>
-                <span className="text-xs font-bold text-white block capitalize">
-                  {currentUser.role} view
-                </span>
-              </div>
+              <span className="text-xs font-bold text-white capitalize">
+                {currentUser.role} view
+              </span>
             </div>
 
             <button
               onClick={handleLock}
-              className="p-1.5 rounded-lg text-emerald-400/80 hover:text-rose-400 hover:bg-rose-950/30 transition"
+              className="p-1 rounded-lg text-emerald-400/80 hover:text-rose-400 hover:bg-rose-950/30 transition cursor-pointer"
               title="Lock Counter Register"
             >
               <Lock className="w-3.5 h-3.5" />
@@ -834,7 +827,7 @@ export default function App() {
 
           <button
             onClick={() => setActiveTab('settings')}
-            className="w-full py-1 px-2 rounded-lg bg-[#0c3927] hover:bg-[#114932] border border-emerald-900/80 text-[11px] text-emerald-200/90 flex items-center justify-center gap-1.5 transition"
+            className="w-full py-1 px-2 rounded-lg bg-[#0c3927] hover:bg-[#114932] border border-emerald-900/80 text-[10px] text-emerald-200/90 flex items-center justify-center gap-1.5 transition cursor-pointer"
           >
             <span className={`w-1.5 h-1.5 rounded-full ${connectionStatus.isPocketBaseLive ? 'bg-emerald-400' : 'bg-amber-400'}`} />
             <span>{connectionStatus.isPocketBaseLive ? 'PocketBase Live' : 'PocketBase not connected'}</span>
@@ -854,9 +847,9 @@ export default function App() {
       {/* MAIN VIEWPORT CANVAS (Offset by 256px on desktop)             */}
       {/* ============================================================== */}
       <div className="flex-1 md:pl-64 flex flex-col min-h-screen">
-        {/* Top Header Bar (Matching Screenshot 1, 2, 3) */}
-        <header className="sticky top-0 z-20 bg-white border-b border-slate-200/80">
-          <div className="px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4">
+        {/* Sleek Single-Row Top Header Bar */}
+        <header className="sticky top-0 z-20 bg-white/95 backdrop-blur-xs border-b border-slate-200/80">
+          <div className="px-4 sm:px-6 py-2.5 flex items-center justify-between gap-4 max-w-7xl mx-auto w-full">
             {/* Left: Mobile hamburger & Active View Heading with Date */}
             <div className="flex items-center gap-3">
               <button
@@ -866,27 +859,33 @@ export default function App() {
                 <Menu className="w-5 h-5" />
               </button>
 
-              <div>
-                <h1 className="text-lg sm:text-xl font-bold text-slate-900 leading-tight">
+              <div className="flex items-baseline gap-2.5 flex-wrap">
+                <h1 className="text-base sm:text-lg font-extrabold text-slate-900 leading-tight">
                   {getPageTitle(activeTab)}
                 </h1>
-                <p className="text-[11px] sm:text-xs text-slate-500 font-sans mt-0.5">
+                <span className="hidden sm:inline text-slate-300">&middot;</span>
+                <p className="text-[11px] text-slate-500 font-sans">
                   {new Date().toLocaleDateString('en-GB', {
-                    weekday: 'long',
+                    weekday: 'short',
                     day: 'numeric',
-                    month: 'long',
+                    month: 'short',
                     year: 'numeric'
                   })}
                 </p>
               </div>
             </div>
 
-            {/* Right: Status Pill, Scanner, Alerts, Settings Shortcut, Avatar */}
-            <div className="flex items-center gap-2 sm:gap-3">
+            {/* Right: Counter Badge, Status Pill, Scanner, Alerts, Shortcuts, Settings, Avatar */}
+            <div className="flex items-center gap-2">
+              <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-900">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                <span>{activeCounter}</span>
+              </div>
+
               <button
                 onClick={() => setIsScannerModalOpen(true)}
-                className="p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition"
-                title="Camera Barcode Scanner"
+                className="p-1.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer"
+                title="Camera Barcode Scanner (F4)"
               >
                 <Camera className="w-4 h-4 text-emerald-800" />
               </button>
@@ -914,15 +913,15 @@ export default function App() {
                 }}
               />
 
-              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700">
-                <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                <span>Preview · local only</span>
+              <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-600">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                <span>{connectionStatus.isPocketBaseLive ? 'PocketBase synced' : 'Local preview'}</span>
               </div>
 
               {/* Global Keyboard Shortcuts Help */}
               <button
                 onClick={() => setIsShortcutsModalOpen(true)}
-                className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition"
+                className="p-1.5 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition cursor-pointer"
                 title="Global Keyboard Shortcuts (Ctrl+/ or ?)"
               >
                 <Keyboard className="w-4 h-4 text-emerald-800" />
@@ -930,7 +929,7 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('settings')}
-                className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition"
+                className="p-1.5 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition cursor-pointer"
                 title="Open Settings (Ctrl+S)"
               >
                 <Settings className="w-4 h-4" />
@@ -939,28 +938,17 @@ export default function App() {
               {/* User Avatar Circle */}
               <button
                 onClick={() => setIsAuthModalOpen(true)}
-                className="w-8 h-8 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 font-bold text-xs flex items-center justify-center hover:scale-105 transition"
+                className="w-7 h-7 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 font-bold text-xs flex items-center justify-center hover:scale-105 transition cursor-pointer"
                 title="Switch Staff or Change PIN"
               >
                 {userInitials}
               </button>
             </div>
           </div>
-
-          {/* Sub-banner: "Sample information · saved in this browser only" (Screenshots 1, 2, 3) */}
-          <div className="px-4 sm:px-8 py-2 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-            <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-              <span>Sample information · saved in this browser only</span>
-            </div>
-            <span className="font-semibold text-slate-700 hidden sm:inline">
-              {activeCounter}
-            </span>
-          </div>
         </header>
 
         {/* Content Body */}
-        <main className="flex-1 px-4 sm:px-8 py-6 max-w-7xl w-full mx-auto">
+        <main className="flex-1 px-4 sm:px-6 py-4 max-w-7xl w-full mx-auto">
           {activeTab === 'overview' && (
             <DashboardView
               medicines={medicines}

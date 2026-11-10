@@ -219,7 +219,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     [filteredTopSellers]
   );
 
-  const recentTransactions = sales.slice(0, 5);
+  const recentTransactions = sales.slice(0, 10);
 
   return (
     <div className="space-y-6">
@@ -437,12 +437,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* SECTION: Recent Activity (Screenshot 1) */}
+      {/* SECTION: Recent Sales Activity (Up to 10 Latest Transactions) */}
       <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-base font-bold text-slate-900">Recent activity</h2>
-            <p className="text-xs text-slate-500">Latest receipts across this preview.</p>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold text-slate-900">Recent sales activity</h2>
+              <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 text-[10px] font-mono tabular-nums font-bold">
+                Latest {recentTransactions.length} of {sales.length}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500">Up to 10 most recent counter receipts recorded across the store.</p>
           </div>
 
           <button
@@ -454,12 +459,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="border border-slate-100 rounded-xl overflow-hidden">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
-              <tr className="border-b border-slate-100 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
+              <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
                 <th className="py-2.5 px-3">INVOICE</th>
                 <th className="py-2.5 px-3">CUSTOMER</th>
+                <th className="py-2.5 px-3 hidden sm:table-cell">ITEMS</th>
                 <th className="py-2.5 px-3">COUNTER</th>
                 <th className="py-2.5 px-3">PAYMENT</th>
                 <th className="py-2.5 px-3 text-right">TOTAL</th>
@@ -468,7 +474,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <tbody className="divide-y divide-slate-100 font-sans text-xs">
               {recentTransactions.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-slate-400 text-xs">
+                  <td colSpan={6} className="py-8 text-center text-slate-400 text-xs">
                     No sales recorded yet. Complete a transaction at the Point of Sale to see receipts here.
                   </td>
                 </tr>
@@ -477,7 +483,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   const isRefunded = txn.status === 'refunded';
                   return (
                     <tr key={txn.id} className="hover:bg-slate-50/50">
-                      <td className="py-3 px-3 font-mono font-bold text-slate-900">
+                      <td className="py-3 px-3 font-mono tabular-nums font-bold text-slate-900">
                         <span>{txn.invoiceNumber}</span>
                         {isRefunded && (
                           <span className="ml-2 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-sans font-bold text-[10px]">
@@ -487,6 +493,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       </td>
                       <td className="py-3 px-3 text-slate-800 font-medium">
                         {txn.customerName}
+                      </td>
+                      <td className="py-3 px-3 text-slate-500 hidden sm:table-cell font-mono tabular-nums">
+                        {txn.items.length} {txn.items.length === 1 ? 'item' : 'items'}
                       </td>
                       <td className="py-3 px-3 text-slate-600">
                         {txn.counterName || activeCounter}
@@ -501,7 +510,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         )}
                       </td>
                       <td
-                        className={`py-3 px-3 text-right font-mono font-bold ${
+                        className={`py-3 px-3 text-right font-mono tabular-nums font-bold ${
                           isRefunded ? 'text-slate-400 line-through' : 'text-slate-900'
                         }`}
                       >
