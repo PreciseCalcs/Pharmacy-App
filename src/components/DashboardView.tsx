@@ -21,7 +21,8 @@ import {
   Pill,
   CheckCircle2,
   Boxes,
-  Printer
+  Printer,
+  Phone
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -222,40 +223,165 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const recentTransactions = sales.slice(0, 10);
 
   return (
-    <div className="space-y-6">
-      {/* Top Welcome Header (Matching Screenshot 1) */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-            <span className="text-xs font-semibold text-emerald-800">{activeCounter}</span>
+    <div className="space-y-5">
+      {/* Store Identity Hero Banner (Matching Screenshot 260 + Open Khata & New sale buttons) */}
+      <div className="relative overflow-hidden rounded-2xl sm:rounded-3xl bg-[#004d3d] text-white p-5 sm:p-6 shadow-md border border-[#006652]">
+        {/* Subtle Decorative Medical Blister Pack & Pill Silhouette Background Motif */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute right-6 top-0 bottom-0 w-72 opacity-10 hidden lg:flex items-center justify-end"
+        >
+          <div className="w-44 h-full border-x-4 border-white/40 flex flex-col justify-between py-3 px-4">
+            <div className="grid grid-cols-3 gap-3">
+              <span className="w-6 h-6 rounded-full bg-white/70" />
+              <span className="w-6 h-6 rounded-full bg-white/70" />
+              <span className="w-6 h-6 rounded-full bg-white/70" />
+              <span className="w-6 h-6 rounded-full bg-white/70" />
+              <span className="w-6 h-6 rounded-full bg-white/70" />
+              <span className="w-6 h-6 rounded-full bg-white/70" />
+              <span className="w-6 h-6 rounded-full bg-white/70" />
+              <span className="w-6 h-6 rounded-full bg-white/70" />
+              <span className="w-6 h-6 rounded-full bg-white/70" />
+            </div>
+            <div className="w-24 h-10 rounded-t-2xl bg-white/60 mx-auto" />
           </div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
+        </div>
+
+        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+          {/* Left: Store Logo Emblem + Pharmacy Identity Details */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-5 min-w-0">
+            {/* White Rounded Logo Card */}
+            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white shadow-md flex items-center justify-center shrink-0 p-2">
+              {pharmacyDetails.logoUrl ? (
+                <img
+                  src={pharmacyDetails.logoUrl}
+                  alt={pharmacyDetails.name}
+                  className="w-full h-full object-contain rounded-xl"
+                />
+              ) : (
+                <svg viewBox="0 0 80 80" className="w-14 h-14">
+                  <path
+                    d="M22 20 A26 26 0 0 1 56 18"
+                    fill="none"
+                    stroke="#0d3b66"
+                    strokeWidth="3.5"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d="M58 60 A26 26 0 0 1 22 60"
+                    fill="none"
+                    stroke="#0d3b66"
+                    strokeWidth="3.5"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d="M58 22 A24 24 0 0 1 64 52"
+                    fill="none"
+                    stroke="#10b981"
+                    strokeWidth="3.5"
+                    strokeLinecap="round"
+                  />
+                  <rect x="35" y="13" width="8" height="3" rx="1" fill="#10b981" />
+                  <rect x="37.5" y="10.5" width="3" height="8" rx="1" fill="#10b981" />
+                  <text
+                    x="17"
+                    y="49"
+                    fill="#0d3b66"
+                    fontFamily="sans-serif"
+                    fontWeight="900"
+                    fontSize="24"
+                  >
+                    Z
+                  </text>
+                  <text
+                    x="36"
+                    y="49"
+                    fill="#10b981"
+                    fontFamily="sans-serif"
+                    fontWeight="900"
+                    fontSize="24"
+                  >
+                    M
+                  </text>
+                </svg>
+              )}
+            </div>
+
+            {/* Identity Badges, Store Name & System Subtitle */}
+            <div className="space-y-2 min-w-0">
+              {/* Top Row: Address, Drug Licence #, NTN #, Phone */}
+              <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                <span className="px-3 py-1 rounded-full bg-[#007a5e] text-white font-bold tracking-wide shadow-2xs">
+                  {pharmacyDetails.address}
+                  {pharmacyDetails.city ? `, ${pharmacyDetails.city.split(',')[0]}` : ''}
+                </span>
+
+                <span className="px-3 py-1 rounded-full bg-[#153e75] text-white font-bold font-mono tabular-nums shadow-2xs">
+                  Licence #: {pharmacyDetails.drugLicenceNumber}
+                </span>
+
+                {pharmacyDetails.ntnNumber && (
+                  <span className="px-2.5 py-1 rounded-full bg-[#07382c] border border-emerald-400/30 text-emerald-100 font-bold font-mono tabular-nums">
+                    NTN: {pharmacyDetails.ntnNumber}
+                  </span>
+                )}
+
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-emerald-200 font-mono font-bold tabular-nums">
+                  <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>{pharmacyDetails.phone}</span>
+                </span>
+              </div>
+
+              {/* Store Title */}
+              <h1 className="text-2xl sm:text-3xl font-serif font-black tracking-wide text-white uppercase leading-tight">
+                {pharmacyDetails.name || 'ZAHID MEDICAL STORE'}
+              </h1>
+
+              {/* Store Subtitle */}
+              <p className="text-xs sm:text-sm text-emerald-100/90 max-w-2xl leading-relaxed">
+                Official Pharmacy Inventory, Batch Expiration Tracker, Daily POS Sales &amp; DRAP Compliance Management System.
+              </p>
+            </div>
+          </div>
+
+          {/* Right: Action Buttons ("Open Khata" & "New sale") */}
+          <div className="flex flex-wrap items-center gap-3 shrink-0 self-start lg:self-center">
+            <button
+              onClick={() => onNavigateTab('khata')}
+              className="px-4 py-2.5 rounded-xl bg-white hover:bg-emerald-50 text-[#06261a] font-bold text-xs sm:text-sm flex items-center gap-2 shadow-sm transition cursor-pointer whitespace-nowrap"
+            >
+              <Users className="w-4 h-4 text-[#007a5e] shrink-0" />
+              <span>Open Khata</span>
+            </button>
+
+            <button
+              onClick={() => onNavigateTab('pos')}
+              className="px-5 py-2.5 rounded-xl bg-[#00b67a] hover:bg-[#00c988] text-slate-950 font-extrabold text-xs sm:text-sm flex items-center gap-2 shadow-md transition cursor-pointer whitespace-nowrap"
+            >
+              <ShoppingCart className="w-4 h-4 text-slate-950 shrink-0" />
+              <span>New sale</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Counter Greeting & Shift Status Bar ("Good day at the counter.") */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
             Good day at the counter.
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1">
+          </h2>
+          <p className="text-xs text-slate-500">
             A clear view of today's sales, stock pressure, and customer accounts.
           </p>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => onNavigateTab('khata')}
-            className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs sm:text-sm flex items-center gap-2 shadow-2xs transition"
-          >
-            <Users className="w-4 h-4 text-slate-600" />
-            <span>Open khata</span>
-          </button>
-
-          <button
-            onClick={() => onNavigateTab('pos')}
-            className="px-4 py-2.5 rounded-xl bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-xs sm:text-sm flex items-center gap-2 shadow-md shadow-emerald-950/20 transition"
-          >
-            <ShoppingCart className="w-4 h-4" />
-            <span>New sale</span>
-          </button>
-        </div>
+        {pharmacyDetails.ownerName && (
+          <div className="text-xs text-slate-500 font-medium">
+            <span className="font-bold text-slate-700">{pharmacyDetails.ownerName}</span>
+            {pharmacyDetails.ownerTitle ? ` · ${pharmacyDetails.ownerTitle}` : ''}
+          </div>
+        )}
       </div>
 
       {/* 4 Primary KPI Cards in 2x2 Grid (Matching Screenshot 1) */}
