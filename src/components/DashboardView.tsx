@@ -40,6 +40,13 @@ import { isToday } from '../utils/dates';
 import { syncEngine } from '../services/syncEngine';
 import { generatePurchaseOrderPDF } from '../services/pdfGenerator';
 import { soundService } from '../services/soundAlerts';
+import {
+  DateRangePicker,
+  DashboardDateRangeState,
+  filterSalesByDateRange,
+  getDateRangeMetadata,
+  toLocalDateKey,
+} from './DateRangePicker';
 
 interface DashboardViewProps {
   medicines: MedicineItem[];
@@ -60,13 +67,96 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 }) => {
   const activeCounter = syncEngine.getActiveCounter();
 
+  // Date Range Filter state for Overview sales & profit metrics
+  const [dateRange, setDateRange] = useState<DashboardDateRangeState>({
+    preset: 'today',
+    customStart: '',
+    customEnd: '',
+  });
+
+  const rangeMeta = useMemo(() => getDateRangeMetadata(dateRange), [dateRange]);
+
   // Metrics calculation (exclude refunded sales from active revenue)
   const completedSales = useMemo(
     () => sales.filter((s) => s.status !== 'refunded'),
     [sales]
   );
-  const todaySales = completedSales.filter((s) => isToday(s.createdAt));
-  const todayRevenue = todaySales.reduce((acc, s) => acc + s.totalAmount, 0);
+
+  const periodSales = useMemo(
+    () => filterSalesByDateRange(completedSales, dateRange),
+    [completedSales, dateRange]
+  );
+
+  const periodAllStatusSales = useMemo(
+    () => filterSalesByDateRange(sales, dateRange),
+    [sales, dateRange]
+  );
+
+  const periodRevenue = useMemo(
+    () => periodSales.reduce((acc, s) => acc + (s.totalAmount || 0), 0),
+    [periodSales]
+  );
+
+  const periodProfit = useMemo(
+    () =>
+      periodSales.reduce((acc, s) => {
+        if (typeof s.totalProfit === 'number' && !isNaN(s.totalProfit)) {
+          return acc + s.totalProfit;
+        }
+        const itemProfit = (s.items || []).reduce(
+          (sum, it) =>
+            sum +
+            (it.profit ??
+              ((it.pricePerUnit || 0) - (it.costPerUnit || 0)) * (it.quantity || 0)),
+          0
+        );
+        return acc + Math.max(0, itemProfit - (s.discountAmount || 0));
+      }, 0),
+    [periodSales]
+  );
+
+  const periodProfitMargin = useMemo(
+    () => (periodRevenue > 0 ? Math.round((periodProfit / periodRevenue) * 1000) / 10 : 0),
+    [periodProfit, periodRevenue]
+  );
+
+  const periodCashRevenue = useMemo(
+    () =>
+      periodSales
+        .filter((s) => s.paymentMethod === 'Cash')
+        .reduce((acc, s) => acc + (s.totalAmount || 0), 0),
+    [periodSales]
+  );
+
+  const periodCreditRevenue = useMemo(
+    () =>
+      periodSales
+        .filter((s) => s.paymentMethod === 'Credit')
+        .reduce((acc, s) => acc + (s.totalAmount || 0), 0),
+    [periodSales]
+  );
+
+  const periodDigitalRevenue = useMemo(
+    () =>
+      periodSales
+        .filter(
+          (s) =>
+            s.paymentMethod === 'Card' ||
+            s.paymentMethod === 'EasyPaisa' ||
+            s.paymentMethod === 'JazzCash'
+        )
+        .reduce((acc, s) => acc + (s.totalAmount || 0), 0),
+    [periodSales]
+  );
+
+  const periodUnitsDispensed = useMemo(
+    () =>
+      periodSales.reduce(
+        (acc, s) => acc + (s.items || []).reduce((sum, i) => sum + (i.quantity || 0), 0),
+        0
+      ),
+    [periodSales]
+  );
 
   const totalKhataBalance = syncEngine.getTotalOutstandingKhata();
   const khataAccountsWithBalance = syncEngine.getKhataAccountsWithBalanceCount();
@@ -137,32 +227,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     });
   }, [criticalStockList, stockAlertFilter]);
 
-  // 7-Day sales revenue trend calculation using 100% real sales data
-  const last7DaysData = useMemo(() => {
+  // Dynamic sales revenue & profit trend calculation adapting to the selected date range
+  const trendChartData = useMemo(() => {
     const days: {
       dateKey: string;
       label: string;
       fullDate: string;
       revenue: number;
+      profit: number;
       orders: number;
     }[] = [];
 
-    const toLocalDateKey = (dateObj: Date) => {
-      const y = dateObj.getFullYear();
-      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-      const d = String(dateObj.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
-    };
-
     const now = new Date();
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(now);
+    const numDays =
+      dateRange.preset === 'this_month'
+        ? Math.max(7, now.getDate())
+        : dateRange.preset === 'custom'
+        ? Math.min(60, Math.max(7, rangeMeta.dayCount))
+        : dateRange.preset === 'all_time'
+        ? 14
+        : 7;
+
+    const endAnchor =
+      dateRange.preset === 'custom' && rangeMeta.endDate ? rangeMeta.endDate : now;
+
+    for (let i = numDays - 1; i >= 0; i--) {
+      const d = new Date(endAnchor);
       d.setDate(d.getDate() - i);
       const dateStr = toLocalDateKey(d);
-      const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+      const dayName =
+        numDays > 10
+          ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+          : d.toLocaleDateString('en-US', { weekday: 'short' });
       const dayMonth = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
 
-      // Find real completed sales matching this local calendar day
       const daySales = completedSales.filter((s) => {
         try {
           const parsed = new Date(s.createdAt);
@@ -174,35 +272,52 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       });
 
       const realRevenue = daySales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+      const realProfit = daySales.reduce((sum, s) => sum + (s.totalProfit || 0), 0);
 
       days.push({
         dateKey: dateStr,
-        label: i === 0 ? 'Today' : dayName,
+        label:
+          toLocalDateKey(now) === dateStr && numDays <= 10 ? 'Today' : dayName,
         fullDate: dayMonth,
         revenue: realRevenue,
+        profit: Math.round(realProfit),
         orders: daySales.length,
       });
     }
 
     return days;
-  }, [completedSales]);
+  }, [completedSales, dateRange, rangeMeta]);
 
-  const total7DayRevenue = useMemo(() => {
-    return last7DaysData.reduce((acc, d) => acc + d.revenue, 0);
-  }, [last7DaysData]);
+  const totalTrendRevenue = useMemo(() => {
+    return trendChartData.reduce((acc, d) => acc + d.revenue, 0);
+  }, [trendChartData]);
 
-  const avgDailyRevenue = Math.round(total7DayRevenue / 7);
+  const totalTrendProfit = useMemo(() => {
+    return trendChartData.reduce((acc, d) => acc + d.profit, 0);
+  }, [trendChartData]);
+
+  const avgDailyRevenue = Math.round(
+    totalTrendRevenue / Math.max(1, trendChartData.length)
+  );
 
   const peakDay = useMemo(() => {
-    return last7DaysData.reduce((max, d) => (d.revenue > max.revenue ? d : max), last7DaysData[0]);
-  }, [last7DaysData]);
+    return trendChartData.reduce(
+      (max, d) => (d.revenue > max.revenue ? d : max),
+      trendChartData[0]
+    );
+  }, [trendChartData]);
 
-  // Frequently sold medicines & store products track record (100% real recorded sales)
+  // Frequently sold medicines & store products track record filtered by selected period (fallback to all sales if period has 0 sales)
   const [topSellerFilter, setTopSellerFilter] = useState<'all' | 'pharmacy' | 'general'>('all');
 
   const fullTrackRecord = useMemo(
-    () => buildProductSalesTrackRecord(completedSales, medicines, false),
-    [completedSales, medicines]
+    () =>
+      buildProductSalesTrackRecord(
+        periodSales.length > 0 ? periodSales : completedSales,
+        medicines,
+        false
+      ),
+    [periodSales, completedSales, medicines]
   );
 
   const filteredTopSellers = useMemo(() => {
@@ -220,7 +335,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     [filteredTopSellers]
   );
 
-  const recentTransactions = sales.slice(0, 10);
+  const recentTransactions = periodAllStatusSales.slice(0, 10);
 
   return (
     <div className="space-y-5">
@@ -365,36 +480,99 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Counter Greeting & Shift Status Bar ("Good day at the counter.") */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1">
+      {/* Counter Greeting & Date Range Filter Bar ("Good day at the counter.") */}
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 px-1">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
             Good day at the counter.
           </h2>
           <p className="text-xs text-slate-500">
-            A clear view of today's sales, stock pressure, and customer accounts.
+            Showing metrics for <span className="font-bold text-emerald-800">{rangeMeta.label}</span> &bull; sales, net profit, stock pressure, and customer accounts.
           </p>
         </div>
 
-        {pharmacyDetails.ownerName && (
-          <div className="text-xs text-slate-500 font-medium">
-            <span className="font-bold text-slate-700">{pharmacyDetails.ownerName}</span>
-            {pharmacyDetails.ownerTitle ? ` · ${pharmacyDetails.ownerTitle}` : ''}
+        {/* Date Range Picker Component */}
+        <DateRangePicker value={dateRange} onChange={setDateRange} />
+      </div>
+
+      {/* Period Financial Breakdown Strip (Total Revenue, Net Profit, Cash vs Credit/Digital) */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/80">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-900">
+              Total Revenue ({rangeMeta.label})
+            </span>
+            <DollarSign className="w-4 h-4 text-emerald-700" />
           </div>
-        )}
+          <div className="text-xl sm:text-2xl font-black text-slate-900 font-mono mt-1">
+            Rs {periodRevenue.toLocaleString()}
+          </div>
+          <span className="text-[11px] text-emerald-800/80 font-medium">
+            {periodSales.length} {periodSales.length === 1 ? 'invoice' : 'invoices'} &bull; {periodUnitsDispensed} units sold
+          </span>
+        </div>
+
+        <div className="p-3 rounded-xl bg-teal-50/70 border border-teal-200/80">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-teal-900">
+              Net Profit ({rangeMeta.label})
+            </span>
+            <TrendingUp className="w-4 h-4 text-teal-700" />
+          </div>
+          <div className="text-xl sm:text-2xl font-black text-teal-950 font-mono mt-1">
+            Rs {Math.round(periodProfit).toLocaleString()}
+          </div>
+          <span className="text-[11px] text-teal-800 font-semibold">
+            {periodProfitMargin}% gross margin on sales
+          </span>
+        </div>
+
+        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600">
+              Cash Counter Sales
+            </span>
+            <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-900">
+              Galla Cash
+            </span>
+          </div>
+          <div className="text-xl sm:text-2xl font-black text-slate-900 font-mono mt-1">
+            Rs {periodCashRevenue.toLocaleString()}
+          </div>
+          <span className="text-[11px] text-slate-500">
+            Digital / Wallets: Rs {periodDigitalRevenue.toLocaleString()}
+          </span>
+        </div>
+
+        <div className="p-3 rounded-xl bg-amber-50/60 border border-amber-200/80">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-900">
+              Credit Sales ({rangeMeta.label})
+            </span>
+            <CreditCard className="w-4 h-4 text-amber-700" />
+          </div>
+          <div className="text-xl sm:text-2xl font-black text-amber-950 font-mono mt-1">
+            Rs {periodCreditRevenue.toLocaleString()}
+          </div>
+          <span className="text-[11px] text-amber-800/90">
+            Total Khata due: Rs {totalKhataBalance.toLocaleString()}
+          </span>
+        </div>
       </div>
 
       {/* 4 Primary KPI Cards in 2x2 Grid (Matching Screenshot 1) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* Card 1: Today's sales */}
+        {/* Card 1: Filtered Period Sales */}
         <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs flex items-center justify-between">
           <div>
-            <span className="text-xs font-semibold text-slate-500">Today's sales</span>
+            <span className="text-xs font-semibold text-slate-500">
+              {rangeMeta.possessiveLabel} sales
+            </span>
             <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono tracking-tight mt-1">
-              Rs {todayRevenue.toLocaleString()}
+              Rs {periodRevenue.toLocaleString()}
             </div>
             <span className="text-[11px] text-slate-400 mt-0.5 block">
-              {todaySales.length} {todaySales.length === 1 ? 'recorded sale' : 'recorded sales'}
+              {periodSales.length} {periodSales.length === 1 ? 'recorded sale' : 'recorded sales'} &bull; Profit: Rs {Math.round(periodProfit).toLocaleString()}
             </span>
           </div>
 
@@ -455,7 +633,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* 7-Day Sales Revenue Performance Line Chart */}
+      {/* Sales Revenue & Profit Performance Line Chart */}
       <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -464,13 +642,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900">7-Day Sales Revenue Trend</h2>
+                <h2 className="text-base font-bold text-slate-900">
+                  Sales Revenue &amp; Profit Trend
+                </h2>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[10px] font-bold">
-                  Past 7 Days
+                  {dateRange.preset === 'this_month'
+                    ? 'This Month'
+                    : dateRange.preset === 'custom'
+                    ? rangeMeta.label
+                    : '7-Day Window'}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Visualizing daily counter sales revenue to track pharmacy turnover and peak shifts.
+                Visualizing daily counter sales revenue and net profit across the selected timeframe.
               </p>
             </div>
           </div>
@@ -478,9 +662,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {/* Metric Badges */}
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
             <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200">
-              <span className="text-[10px] text-slate-500 block font-medium">7-Day Total</span>
+              <span className="text-[10px] text-slate-500 block font-medium">Window Revenue</span>
               <span className="font-bold text-slate-900 font-mono text-xs sm:text-sm">
-                Rs {total7DayRevenue.toLocaleString()}
+                Rs {totalTrendRevenue.toLocaleString()}
+              </span>
+            </div>
+
+            <div className="px-3 py-1.5 rounded-xl bg-emerald-50/70 border border-emerald-200">
+              <span className="text-[10px] text-emerald-800 block font-semibold">Window Profit</span>
+              <span className="font-bold text-emerald-900 font-mono text-xs sm:text-sm">
+                Rs {totalTrendProfit.toLocaleString()}
               </span>
             </div>
 
@@ -506,7 +697,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="h-64 sm:h-72 w-full pt-3">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
-              data={last7DaysData}
+              data={trendChartData}
               margin={{ top: 12, right: 18, left: 0, bottom: 4 }}
             >
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
@@ -538,7 +729,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           {data.fullDate} &bull; {data.label}
                         </div>
                         <div className="text-base font-black text-emerald-400 font-mono tracking-tight">
-                          Rs {Number(data.revenue).toLocaleString()}
+                          Revenue: Rs {Number(data.revenue).toLocaleString()}
+                        </div>
+                        <div className="text-xs font-bold text-teal-300 font-mono mt-0.5">
+                          Net Profit: Rs {Number(data.profit).toLocaleString()}
                         </div>
                         <div className="text-[10px] text-slate-400 mt-0.5">
                           {data.orders} sales recorded
@@ -553,27 +747,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <Line
                 type="monotone"
                 dataKey="revenue"
+                name="Revenue"
                 stroke="#083322"
                 strokeWidth={3}
                 dot={{ r: 4.5, fill: '#083322', stroke: '#ffffff', strokeWidth: 2 }}
                 activeDot={{ r: 7, fill: '#10b981', stroke: '#083322', strokeWidth: 2.5 }}
+              />
+              <Line
+                type="monotone"
+                dataKey="profit"
+                name="Net Profit"
+                stroke="#0d9488"
+                strokeWidth={2.5}
+                strokeDasharray="5 3"
+                dot={{ r: 3.5, fill: '#0d9488', stroke: '#ffffff', strokeWidth: 1.5 }}
               />
             </LineChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      {/* SECTION: Recent Sales Activity (Up to 10 Latest Transactions) */}
+      {/* SECTION: Recent Sales Activity (Filtered by Period) */}
       <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold text-slate-900">Recent sales activity</h2>
+              <h2 className="text-base font-bold text-slate-900">
+                Recent sales activity ({rangeMeta.label})
+              </h2>
               <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 text-[10px] font-mono tabular-nums font-bold">
-                Latest {recentTransactions.length} of {sales.length}
+                Showing {recentTransactions.length} of {periodAllStatusSales.length}
               </span>
             </div>
-            <p className="text-xs text-slate-500">Up to 10 most recent counter receipts recorded across the store.</p>
+            <p className="text-xs text-slate-500">
+              Counter receipts recorded during {rangeMeta.label.toLowerCase()}.
+            </p>
           </div>
 
           <button

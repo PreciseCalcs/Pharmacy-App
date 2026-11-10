@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Pill, Save, Sparkles, AlertCircle, Upload, Trash2, Image as ImageIcon, ShoppingBag, Heart, RefreshCw, Barcode } from 'lucide-react';
+import { X, Pill, Save, Sparkles, AlertCircle, Upload, Trash2, Image as ImageIcon, ShoppingBag, Heart, RefreshCw, Barcode, QrCode, CheckCircle2 } from 'lucide-react';
 import { DosageForm, MedicineCategory, MedicineItem, ProductDepartment } from '../types/pharmacy';
 import { soundService } from '../services/soundAlerts';
 import { getExpiryBadgeMeta } from '../utils/pharmacyHelpers';
 import { BarcodeGenerator, generateSmartBarcode } from './BarcodeGenerator';
+import { parseScannedCode, ParsedCodeResult } from '../utils/codeParser';
 
 interface MedicineModalProps {
   isOpen: boolean;
@@ -94,9 +95,13 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [imageError, setImageError] = useState('');
+  const [scanBoxInput, setScanBoxInput] = useState('');
+  const [lastParsedBox, setLastParsedBox] = useState<ParsedCodeResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    setScanBoxInput('');
+    setLastParsedBox(null);
     if (medicine) {
       setFormData({ ...medicine });
     } else {
@@ -184,6 +189,54 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
     }));
   };
 
+  // Auto-fill form fields from a scanned or pasted 2D GS1 DataMatrix / 1D barcode
+  const handleDecodeAndAutoFill = (rawString?: string) => {
+    const codeToParse = (rawString ?? scanBoxInput).trim();
+    if (!codeToParse) return;
+
+    const parsed = parseScannedCode(codeToParse, []);
+    setLastParsedBox(parsed);
+
+    setFormData((prev) => {
+      const nextUnits = parsed.unitsPerPack ?? prev.unitsPerPack ?? 1;
+      const validUnits = nextUnits > 0 ? nextUnits : 1;
+      const nextRetail =
+        parsed.unitRetailPrice !== undefined && parsed.unitRetailPrice > 0
+          ? parsed.unitRetailPrice
+          : prev.unitRetailPrice || 0;
+      const nextCost =
+        parsed.unitRetailPrice !== undefined && parsed.unitRetailPrice > 0
+          ? Math.round(parsed.unitRetailPrice * 0.85 * 100) / 100
+          : prev.unitCostPrice || 0;
+
+      const nextName = parsed.productName || prev.name || '';
+      const nextGeneric =
+        prev.genericName?.trim() ||
+        (parsed.productName
+          ? `${parsed.productName}${parsed.dosageFormLabel ? ` (${parsed.dosageFormLabel})` : ''}`
+          : prev.genericName || '');
+
+      return {
+        ...prev,
+        barcode: parsed.barcode || prev.barcode,
+        name: nextName,
+        genericName: nextGeneric,
+        strength: parsed.strength || prev.strength,
+        dosageForm: parsed.dosageForm || prev.dosageForm,
+        category: parsed.category || prev.category,
+        batchNumber: parsed.batchNumber || prev.batchNumber,
+        expiryDate: parsed.expiryDate || prev.expiryDate,
+        unitsPerPack: validUnits,
+        unitRetailPrice: nextRetail,
+        unitCostPrice: nextCost,
+        looseRetailPrice: Number((nextRetail / validUnits).toFixed(2)),
+        looseCostPrice: Number((nextCost / validUnits).toFixed(2)),
+      };
+    });
+
+    soundService.scanSuccess();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -240,6 +293,108 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
               <span>{error}</span>
             </div>
           )}
+
+          {/* Scan 2D Box / Barcode to Auto-Fill Banner */}
+          <div className="p-3.5 rounded-xl bg-gradient-to-r from-[#072418] to-[#0c3927] text-white space-y-2.5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-300 shrink-0">
+                  <QrCode className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-extrabold text-xs sm:text-sm text-white flex items-center gap-2">
+                    <span>Scan 2D Box / Barcode to Auto-Fill</span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 text-[10px] font-mono">
+                      GS1 DataMatrix Ready
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-emerald-100/80">
+                    Scan medicine box 2D DataMatrix or paste raw GS1 string to auto-fill GTIN, Brand, Strength, Form, Batch, Expiry &amp; MRP.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const sample =
+                    '01089640042395191727093010005240Flutiaze137/50NS120spRs.830.0021009095.';
+                  setScanBoxInput(sample);
+                  handleDecodeAndAutoFill(sample);
+                }}
+                className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 border border-white/15 text-emerald-200 text-[10px] font-bold whitespace-nowrap self-start sm:self-center cursor-pointer"
+                title="Test with sample DRAP 2D DataMatrix string"
+              >
+                Try Sample 2D Code
+              </button>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={scanBoxInput}
+                onChange={(e) => setScanBoxInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleDecodeAndAutoFill();
+                  }
+                }}
+                placeholder="Focus here & scan 2D DataMatrix box (e.g. 01089640042395191727093010005240Flutiaze...)"
+                className="flex-1 px-3 py-2 rounded-lg bg-white text-slate-900 font-mono text-xs placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              />
+              <button
+                type="button"
+                onClick={() => handleDecodeAndAutoFill()}
+                className="px-4 py-2 rounded-lg bg-[#00b67a] hover:bg-[#00c988] text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Auto-Fill Fields</span>
+              </button>
+            </div>
+
+            {lastParsedBox && (
+              <div className="pt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-200 font-sans font-bold">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-300" />
+                  <span>Decoded:</span>
+                </span>
+                <span className="px-2 py-0.5 rounded bg-black/30 text-white">
+                  GTIN(01): {lastParsedBox.barcode}
+                </span>
+                {lastParsedBox.productName && (
+                  <span className="px-2 py-0.5 rounded bg-black/30 text-emerald-300 font-bold">
+                    Brand(240): {lastParsedBox.productName} {lastParsedBox.strength || ''}
+                  </span>
+                )}
+                {(lastParsedBox.dosageFormLabel || lastParsedBox.dosageForm) && (
+                  <span className="px-2 py-0.5 rounded bg-black/30 text-sky-200">
+                    Form: {lastParsedBox.dosageFormLabel || lastParsedBox.dosageForm}
+                  </span>
+                )}
+                {lastParsedBox.unitRetailPrice !== undefined && (
+                  <span className="px-2 py-0.5 rounded bg-black/30 text-amber-300 font-bold">
+                    MRP: Rs. {lastParsedBox.unitRetailPrice.toFixed(2)}
+                  </span>
+                )}
+                {lastParsedBox.expiryDate && (
+                  <span className="px-2 py-0.5 rounded bg-black/30 text-white">
+                    EXP(17): {lastParsedBox.expiryDate}
+                  </span>
+                )}
+                {lastParsedBox.batchNumber && (
+                  <span className="px-2 py-0.5 rounded bg-black/30 text-white">
+                    Batch(10): {lastParsedBox.batchNumber}
+                  </span>
+                )}
+                {lastParsedBox.serialNumber && (
+                  <span className="px-2 py-0.5 rounded bg-black/30 text-emerald-200/80">
+                    SN(21): {lastParsedBox.serialNumber}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Product Image & Department Card */}
           <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row items-center gap-4">
