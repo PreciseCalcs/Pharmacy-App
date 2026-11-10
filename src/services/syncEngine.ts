@@ -85,6 +85,7 @@ export class PharmacySyncEngine {
   private gallaClosings: GallaClosingRecord[] = [...INITIAL_GALLA_CLOSINGS];
   private gallaOpeningFloats: Record<string, number> = { ...DEFAULT_COUNTER_FLOATS };
   private subscribers: Array<() => void> = [];
+  private isSyncingOutbox = false;
 
   constructor() {
     this.init();
@@ -1670,113 +1671,123 @@ export class PharmacySyncEngine {
 
   // Full Outbox sync when PocketBase is reachable
   public async syncWithPocketBase(): Promise<{ synced: number; failed: number }> {
-    const health = await checkPocketBaseHealth();
-    if (!health.isPocketBaseLive) {
+    if (this.isSyncingOutbox || this.outbox.length === 0) {
       return { synced: 0, failed: this.outbox.length };
     }
+    this.isSyncingOutbox = true;
+    try {
+      const health = await checkPocketBaseHealth();
+      if (!health.isPocketBaseLive) {
+        return { synced: 0, failed: this.outbox.length };
+      }
 
-    let synced = 0;
-    let failed = 0;
-    const remainingOutbox = [];
+      let synced = 0;
+      let failed = 0;
+      const remainingOutbox = [];
 
-    for (const item of this.outbox) {
-      try {
-        switch (item.action) {
-          case 'PROCESS_SALE':
-          case 'REFUND_SALE': {
-            const sale = item.payload as SaleTransaction;
-            await this.upsertPbRecord('sales', sale.id, sale as Record<string, any>);
-            // Also ensure updated stock levels for sold/returned items are synced to PocketBase
-            if (Array.isArray(sale.items)) {
-              for (const soldItem of sale.items) {
-                const currentMed = this.medicines.find((m) => m.id === soldItem.medicineId);
-                if (currentMed) {
-                  await this.upsertPbRecord('medicines', currentMed.id, currentMed);
+      for (const item of this.outbox) {
+        try {
+          switch (item.action) {
+            case 'PROCESS_SALE':
+            case 'REFUND_SALE': {
+              const sale = item.payload as SaleTransaction;
+              await this.upsertPbRecord('sales', sale.id, sale as Record<string, any>);
+              // Also ensure updated stock levels for sold/returned items are synced to PocketBase
+              if (Array.isArray(sale.items)) {
+                for (const soldItem of sale.items) {
+                  const currentMed = this.medicines.find((m) => m.id === soldItem.medicineId);
+                  if (currentMed) {
+                    await this.upsertPbRecord('medicines', currentMed.id, currentMed);
+                  }
                 }
               }
+              break;
             }
-            break;
-          }
-          case 'ADD_MEDICINE': {
-            const med = item.payload as MedicineItem;
-            await this.upsertPbRecord('medicines', med.id, med as Record<string, any>);
-            break;
-          }
-          case 'UPDATE_MEDICINE': {
-            const { id, updates, fullItem } = item.payload as {
-              id: string;
-              updates: Partial<MedicineItem>;
-              fullItem?: MedicineItem;
-            };
-            const targetMed = fullItem || this.medicines.find((m) => m.id === id);
-            if (targetMed) {
-              await this.upsertPbRecord('medicines', id, targetMed as Record<string, any>);
-            } else {
-              await pb.collection('medicines').update(this.toPbId(id), updates);
+            case 'ADD_MEDICINE': {
+              const med = item.payload as MedicineItem;
+              await this.upsertPbRecord('medicines', med.id, med as Record<string, any>);
+              break;
             }
-            break;
-          }
-          case 'DELETE_MEDICINE': {
-            const { id } = item.payload as { id: string };
-            try {
-              await pb.collection('medicines').delete(this.toPbId(id));
-            } catch {}
-            break;
-          }
-          case 'ADD_KHATA_CUSTOMER': {
-            const customer = item.payload as CustomerKhata;
-            await this.upsertPbRecord(
-              'customers_khata',
-              customer.id,
-              customer as Record<string, any>
-            );
-            break;
-          }
-          case 'RECORD_KHATA_PAYMENT':
-          case 'RECORD_KHATA_SALE': {
-            const { customerId, customer } = item.payload as {
-              customerId: string;
-              customer?: CustomerKhata;
-            };
-            const targetCustomer =
-              customer || this.khataCustomers.find((c) => c.id === customerId);
-            if (targetCustomer) {
+            case 'UPDATE_MEDICINE': {
+              const { id, updates, fullItem } = item.payload as {
+                id: string;
+                updates: Partial<MedicineItem>;
+                fullItem?: MedicineItem;
+              };
+              const targetMed = fullItem || this.medicines.find((m) => m.id === id);
+              if (targetMed) {
+                await this.upsertPbRecord('medicines', id, targetMed as Record<string, any>);
+              } else {
+                await pb.collection('medicines').update(this.toPbId(id), updates);
+              }
+              break;
+            }
+            case 'DELETE_MEDICINE': {
+              const { id } = item.payload as { id: string };
+              try {
+                await pb.collection('medicines').delete(this.toPbId(id));
+              } catch {}
+              break;
+            }
+            case 'ADD_KHATA_CUSTOMER': {
+              const customer = item.payload as CustomerKhata;
               await this.upsertPbRecord(
                 'customers_khata',
-                customerId,
-                targetCustomer as Record<string, any>
+                customer.id,
+                customer as Record<string, any>
               );
+              break;
             }
-            break;
+            case 'RECORD_KHATA_PAYMENT':
+            case 'RECORD_KHATA_SALE': {
+              const { customerId, customer } = item.payload as {
+                customerId: string;
+                customer?: CustomerKhata;
+              };
+              const targetCustomer =
+                customer || this.khataCustomers.find((c) => c.id === customerId);
+              if (targetCustomer) {
+                await this.upsertPbRecord(
+                  'customers_khata',
+                  customerId,
+                  targetCustomer as Record<string, any>
+                );
+              }
+              break;
+            }
+            case 'DELETE_KHATA_CUSTOMER': {
+              const { customerId } = item.payload as { customerId: string };
+              try {
+                await pb.collection('customers_khata').delete(this.toPbId(customerId));
+              } catch {}
+              break;
+            }
+            case 'UPDATE_SETTINGS': {
+              const details = item.payload as PharmacyDetails;
+              await this.syncSettingsRecord(details);
+              break;
+            }
+            default:
+              break;
           }
-          case 'DELETE_KHATA_CUSTOMER': {
-            const { customerId } = item.payload as { customerId: string };
-            try {
-              await pb.collection('customers_khata').delete(this.toPbId(customerId));
-            } catch {}
-            break;
-          }
-          case 'UPDATE_SETTINGS': {
-            const details = item.payload as PharmacyDetails;
-            await this.syncSettingsRecord(details);
-            break;
-          }
-          default:
-            break;
+          synced++;
+        } catch (err) {
+          console.warn(`Outbox item push failed (${item.action}):`, err);
+          failed++;
+          remainingOutbox.push(item);
         }
-        synced++;
-      } catch (err) {
-        console.warn(`Outbox item push failed (${item.action}):`, err);
-        failed++;
-        remainingOutbox.push(item);
       }
+
+      this.outbox = remainingOutbox;
+      this.saveOutbox();
+      if (synced > 0) {
+        this.notify();
+      }
+
+      return { synced, failed };
+    } finally {
+      this.isSyncingOutbox = false;
     }
-
-    this.outbox = remainingOutbox;
-    this.saveOutbox();
-    this.notify();
-
-    return { synced, failed };
   }
 
   // --- Monthly Financial Audit & Expense Ledger ---

@@ -119,6 +119,7 @@ export default function App() {
   // PocketBase Connection & Auto-Reconnect / Outbox Sync Progress
   const RECONNECT_INTERVAL_SECONDS = 15;
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(RECONNECT_INTERVAL_SECONDS);
+  const reconnectCountdownRef = useRef<number>(RECONNECT_INTERVAL_SECONDS);
   const [isReconnectingSync, setIsReconnectingSync] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
     isConnected: true,
@@ -127,6 +128,26 @@ export default function App() {
     lastChecked: 'Checking...',
     pendingSyncCount: 0,
   });
+
+  const handleExternalScanConsumed = useCallback(() => {
+    setExternalScannedItem(null);
+  }, []);
+
+  const handleExternalReceiptScanConsumed = useCallback(() => {
+    setExternalScannedReceipt(null);
+  }, []);
+
+  const handleExternalFilterConsumed = useCallback(() => {
+    setExternalInventoryFilter(null);
+  }, []);
+
+  const handleInitialMedicineConsumed = useCallback(() => {
+    setInitialBarcodeMedicine(null);
+  }, []);
+
+  const handleReportSectionConsumed = useCallback(() => {
+    setInitialReportSection(null);
+  }, []);
 
   const refreshHealth = useCallback(async (isAutoRetry = false) => {
     if (isAutoRetry) {
@@ -146,6 +167,7 @@ export default function App() {
     if (isAutoRetry) {
       setTimeout(() => {
         setIsReconnectingSync(false);
+        reconnectCountdownRef.current = RECONNECT_INTERVAL_SECONDS;
         setReconnectCountdown(RECONNECT_INTERVAL_SECONDS);
       }, 700);
     }
@@ -176,7 +198,7 @@ export default function App() {
     },
     [currentUser.role, showToast]
   );
-  
+
   // SyncEngine Subscription & 1-Second Reconnect/Sync Countdown Ticker
   useEffect(() => {
     refreshHealth(false);
@@ -190,17 +212,21 @@ export default function App() {
       setPharmacyDetails(syncEngine.getPharmacyDetails());
       setCounters(syncEngine.getCounters());
       setActiveCounter(syncEngine.getActiveCounter());
-      refreshHealth(false);
+      setConnectionStatus((prev) => ({
+        ...prev,
+        pendingSyncCount: syncEngine.getOutboxCount(),
+      }));
     });
 
     const countdownTimer = setInterval(() => {
-      setReconnectCountdown((prev) => {
-        if (prev <= 1) {
-          refreshHealth(true);
-          return RECONNECT_INTERVAL_SECONDS;
-        }
-        return prev - 1;
-      });
+      if (reconnectCountdownRef.current <= 1) {
+        reconnectCountdownRef.current = RECONNECT_INTERVAL_SECONDS;
+        setReconnectCountdown(RECONNECT_INTERVAL_SECONDS);
+        refreshHealth(true);
+      } else {
+        reconnectCountdownRef.current -= 1;
+        setReconnectCountdown(reconnectCountdownRef.current);
+      }
     }, 1000);
 
     return () => {
@@ -1109,9 +1135,9 @@ export default function App() {
                 setIsInvoiceModalOpen(true);
               }}
               externalScannedItem={externalScannedItem}
-              onExternalScanConsumed={() => setExternalScannedItem(null)}
+              onExternalScanConsumed={handleExternalScanConsumed}
               externalScannedReceipt={externalScannedReceipt}
-              onExternalReceiptScanConsumed={() => setExternalScannedReceipt(null)}
+              onExternalReceiptScanConsumed={handleExternalReceiptScanConsumed}
               onUnrecognizedBarcode={(code) => {
                 soundService.scanWarning();
                 setUnrecognizedCode(code);
@@ -1153,7 +1179,7 @@ export default function App() {
               }}
               canEdit={currentUser.role === 'owner' || currentUser.role === 'pharmacist'}
               externalStockFilter={externalInventoryFilter}
-              onExternalFilterConsumed={() => setExternalInventoryFilter(null)}
+              onExternalFilterConsumed={handleExternalFilterConsumed}
             />
           )}
 
@@ -1163,7 +1189,7 @@ export default function App() {
               pharmacyDetails={pharmacyDetails}
               canEdit={currentUser.role === 'owner' || currentUser.role === 'pharmacist'}
               initialSelectedMedicine={initialBarcodeMedicine}
-              onInitialMedicineConsumed={() => setInitialBarcodeMedicine(null)}
+              onInitialMedicineConsumed={handleInitialMedicineConsumed}
               onUpdateMedicine={async (id, updates) => {
                 const updated = await syncEngine.updateMedicine(id, updates);
                 setMedicines(syncEngine.getMedicines());
@@ -1231,7 +1257,7 @@ export default function App() {
                 currentUser.role === 'owner' || currentUser.role === 'pharmacist'
               }
               initialReportSection={initialReportSection}
-              onReportSectionConsumed={() => setInitialReportSection(null)}
+              onReportSectionConsumed={handleReportSectionConsumed}
             />
           )}
 

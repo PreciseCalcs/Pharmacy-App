@@ -1,7 +1,204 @@
 import * as XLSX from 'xlsx';
 import { MedicineItem, SaleTransaction, ZAHID_PHARMACY_DETAILS } from '../types/pharmacy';
 import { formatDateTime } from '../utils/dates';
-import { getPieceCostPrice, getPieceRetailPrice, getTotalPiecesInStock, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
+import { getDaysUntilExpiry, getPieceCostPrice, getPieceRetailPrice, getTotalPiecesInStock, isExpired, isExpiringSoon } from '../utils/pharmacyHelpers';
+
+function escapeCsvCell(value: unknown): string {
+  if (value === null || value === undefined) return '""';
+  const str = String(value).replace(/"/g, '""');
+  return `"${str}"`;
+}
+
+/**
+ * Exports the current medicine & product inventory list to a UTF-8 CSV file for physical stock & financial auditing.
+ */
+export function exportInventoryToCSV(
+  medicines: MedicineItem[],
+  customFileName?: string
+): {
+  fileName: string;
+  rowCount: number;
+  totalCostValue: number;
+  totalRetailValue: number;
+} {
+  const headers = [
+    'S.No',
+    'Item ID',
+    'Medicine / Product Name',
+    'Generic Formula',
+    'Department',
+    'Category',
+    'Dosage Form',
+    'Strength',
+    'Barcode / GTIN',
+    'Internal SKU',
+    'Batch Number',
+    'Expiry Date',
+    'Expiry Audit Status',
+    'Days Until Expiry',
+    'Shelf Location',
+    'Packs in Stock',
+    'Loose Units in Stock',
+    'Units Per Pack',
+    'Total Pieces in Stock',
+    'Min Threshold (Packs)',
+    'Stock Audit Status',
+    'Pack Cost (PKR)',
+    'Pack Retail MRP (PKR)',
+    'Loose Piece Retail (PKR)',
+    'Total Cost Valuation (PKR)',
+    'Total Retail Valuation (PKR)',
+    'Unrealized Margin (PKR)',
+    'Manufacturer',
+    'Supplier',
+    'Requires Prescription',
+    'Physical Audit Count (Packs)',
+    'Audit Variance Notes',
+  ];
+
+  let grandTotalPacks = 0;
+  let grandTotalPieces = 0;
+  let grandTotalCostValue = 0;
+  let grandTotalRetailValue = 0;
+
+  const rows = medicines.map((m, idx) => {
+    const totalPieces = getTotalPiecesInStock(m);
+    const pieceRetail = getPieceRetailPrice(m);
+    const pieceCost = getPieceCostPrice(m);
+    const totalRetailValue =
+      Math.round(
+        (m.currentStockPacks * m.unitRetailPrice +
+          (m.currentStockLoose || 0) * pieceRetail) *
+          100
+      ) / 100;
+    const totalCostValue =
+      Math.round(
+        (m.currentStockPacks * m.unitCostPrice +
+          (m.currentStockLoose || 0) * pieceCost) *
+          100
+      ) / 100;
+    const unrealizedProfit =
+      Math.round((totalRetailValue - totalCostValue) * 100) / 100;
+
+    grandTotalPacks += m.currentStockPacks || 0;
+    grandTotalPieces += totalPieces;
+    grandTotalCostValue += totalCostValue;
+    grandTotalRetailValue += totalRetailValue;
+
+    const daysLeft = getDaysUntilExpiry(m.expiryDate);
+    const expiryStatus = isExpired(m.expiryDate)
+      ? 'EXPIRED'
+      : isExpiringSoon(m.expiryDate, 30)
+      ? 'EXPIRING <= 30 DAYS'
+      : isExpiringSoon(m.expiryDate, 60)
+      ? 'EXPIRING <= 60 DAYS'
+      : isExpiringSoon(m.expiryDate, 90)
+      ? 'EXPIRING <= 90 DAYS'
+      : 'SAFE';
+
+    const threshold = m.minThresholdPacks || 5;
+    const stockStatus =
+      m.currentStockPacks === 0 && (m.currentStockLoose || 0) === 0
+        ? 'OUT OF STOCK'
+        : m.currentStockPacks <= threshold
+        ? 'LOW STOCK'
+        : 'IN STOCK';
+
+    return [
+      idx + 1,
+      escapeCsvCell(m.id),
+      escapeCsvCell(m.name),
+      escapeCsvCell(m.genericName),
+      escapeCsvCell(m.department || 'pharmacy'),
+      escapeCsvCell(m.category),
+      escapeCsvCell(m.dosageForm),
+      escapeCsvCell(m.strength),
+      escapeCsvCell(m.barcode),
+      escapeCsvCell(m.sku),
+      escapeCsvCell(m.batchNumber),
+      escapeCsvCell(m.expiryDate),
+      escapeCsvCell(expiryStatus),
+      daysLeft,
+      escapeCsvCell(m.shelfLocation),
+      m.currentStockPacks,
+      m.currentStockLoose || 0,
+      m.unitsPerPack,
+      totalPieces,
+      threshold,
+      escapeCsvCell(stockStatus),
+      m.unitCostPrice,
+      m.unitRetailPrice,
+      Number(pieceRetail.toFixed(2)),
+      totalCostValue,
+      totalRetailValue,
+      unrealizedProfit,
+      escapeCsvCell(m.manufacturer),
+      escapeCsvCell(m.supplier || ''),
+      escapeCsvCell(m.requiresPrescription ? 'Yes' : 'No'),
+      escapeCsvCell(''),
+      escapeCsvCell(''),
+    ].join(',');
+  });
+
+  // Add audit summary footer row
+  const summaryRow = [
+    escapeCsvCell('TOTAL'),
+    escapeCsvCell(`${medicines.length} SKUs`),
+    escapeCsvCell(`${ZAHID_PHARMACY_DETAILS.name} Inventory Audit`),
+    escapeCsvCell(`Exported ${new Date().toLocaleString('en-PK')}`),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    grandTotalPacks,
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    grandTotalPieces,
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    Math.round(grandTotalCostValue * 100) / 100,
+    Math.round(grandTotalRetailValue * 100) / 100,
+    Math.round((grandTotalRetailValue - grandTotalCostValue) * 100) / 100,
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+    escapeCsvCell(''),
+  ].join(',');
+
+  const csvContent = '\uFEFF' + [headers.join(','), ...rows, summaryRow].join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  const fileName =
+    customFileName || `Zahid_Medical_Store_Inventory_Audit_${dateStamp}.csv`;
+
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', fileName);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+
+  return {
+    fileName,
+    rowCount: medicines.length,
+    totalCostValue: Math.round(grandTotalCostValue * 100) / 100,
+    totalRetailValue: Math.round(grandTotalRetailValue * 100) / 100,
+  };
+}
 
 export function exportInventoryToExcel(medicines: MedicineItem[]): void {
   const data = medicines.map((m) => {

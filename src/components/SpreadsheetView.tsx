@@ -34,6 +34,7 @@ import {
 } from '../utils/pharmacyHelpers';
 import { formatDate } from '../utils/dates';
 import { 
+  exportInventoryToCSV,
   exportInventoryToExcel, 
   exportExpiryAuditToExcel, 
   downloadMedicineImportTemplate, 
@@ -270,8 +271,20 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
 
           {/* Export Menu */}
           <button
+            onClick={() => {
+              soundService.cashRegister();
+              exportInventoryToCSV(filteredMedicines);
+            }}
+            className="px-3 py-2 rounded-xl border border-emerald-300 bg-white hover:bg-emerald-50 text-emerald-900 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+            title="Export medicine inventory list to a CSV file for physical stock & financial auditing"
+          >
+            <Download className="w-4 h-4 text-emerald-700" />
+            <span>Audit CSV</span>
+          </button>
+
+          <button
             onClick={() => exportInventoryToExcel(medicines)}
-            className="px-3 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition"
+            className="px-3 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition cursor-pointer"
             title="Download full inventory workbook (.xlsx)"
           >
             <Download className="w-4 h-4 text-slate-600" />

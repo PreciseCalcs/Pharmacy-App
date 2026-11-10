@@ -155,11 +155,6 @@ export const PosView: React.FC<PosViewProps> = ({
     return unsub;
   }, []);
 
-  // Reset pagination when filter, search query, or view mode changes
-  useEffect(() => {
-    setCatalogPage(1);
-  }, [searchQuery, posDepartment, catalogViewMode]);
-
   const handleQuickAddShortBook = (opts: {
     itemName: string;
     strengthOrPack?: string;
@@ -316,7 +311,8 @@ export const PosView: React.FC<PosViewProps> = ({
       addToCart(externalScannedItem.medicine, 'pack');
       onExternalScanConsumed?.();
     }
-  }, [externalScannedItem, addToCart, onExternalScanConsumed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalScannedItem, addToCart]);
 
   // Consume external receipt barcode scans (from Camera Scanner or global Hardware Gun)
   useEffect(() => {
@@ -328,7 +324,8 @@ export const PosView: React.FC<PosViewProps> = ({
       setReturnLookupError(null);
       onExternalReceiptScanConsumed?.();
     }
-  }, [externalScannedReceipt, onExternalReceiptScanConsumed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalScannedReceipt]);
 
   const handleLookupReceipt = (rawQuery?: string) => {
     const query = (rawQuery ?? receiptLookupInput).trim();
@@ -465,15 +462,33 @@ export const PosView: React.FC<PosViewProps> = ({
 
   // Available medicines for fast catalog select (excludes out-of-stock and expired items)
   const availableMedicines = useMemo(() => {
+    const rawTrimmed = searchQuery.trim();
+    const q = rawTrimmed.toLowerCase();
+    // If search query looks like a 2D GS1 DataMatrix string, extract its GTIN/product name for live filtering
+    const gs1Parsed =
+      rawTrimmed.length >= 16 && /^(\(01\)|01)\d{14}/.test(rawTrimmed)
+        ? parseScannedCode(rawTrimmed, inStockValidMedicines)
+        : null;
+
     return inStockValidMedicines.filter((m) => {
       if (!matchesDepartment(m, posDepartment)) return false;
-
-      const q = searchQuery.toLowerCase().trim();
       if (!q) return true;
+
+      if (gs1Parsed?.matchedMedicine && gs1Parsed.matchedMedicine.id === m.id) {
+        return true;
+      }
+      if (
+        gs1Parsed?.productName &&
+        m.name.toLowerCase().includes(gs1Parsed.productName.toLowerCase())
+      ) {
+        return true;
+      }
+
       return (
         m.name.toLowerCase().includes(q) ||
         m.genericName.toLowerCase().includes(q) ||
-        m.barcode.includes(q) ||
+        m.barcode.toLowerCase().includes(q) ||
+        (m.barcode.length >= 8 && q.includes(m.barcode.toLowerCase())) ||
         m.sku.toLowerCase().includes(q) ||
         (m.category && m.category.toLowerCase().includes(q))
       );
@@ -482,13 +497,14 @@ export const PosView: React.FC<PosViewProps> = ({
 
   // Paginated or full catalog slice (6 items in Grid = 3 clean rows; 8 items in Compact)
   const totalPages = Math.max(1, Math.ceil(availableMedicines.length / itemsPerPage));
+  const safeCatalogPage = Math.min(catalogPage, totalPages);
   const displayedMedicines = useMemo(() => {
     if (showAllCatalog || searchQuery.trim().length > 0) {
       return availableMedicines;
     }
-    const start = (catalogPage - 1) * itemsPerPage;
+    const start = (safeCatalogPage - 1) * itemsPerPage;
     return availableMedicines.slice(start, start + itemsPerPage);
-  }, [availableMedicines, catalogPage, showAllCatalog, searchQuery, itemsPerPage]);
+  }, [availableMedicines, safeCatalogPage, showAllCatalog, searchQuery, itemsPerPage]);
 
   // Handle Enter key inside the POS search box (for barcode guns or fast Enter dispensing)
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -521,9 +537,12 @@ export const PosView: React.FC<PosViewProps> = ({
         return;
       }
 
-      if (/^\d{6,14}$/.test(raw) && onUnrecognizedBarcode) {
+      if (
+        (parsed.isGS1DataMatrix || /^\d{6,14}$/.test(raw)) &&
+        onUnrecognizedBarcode
+      ) {
         setSearchQuery('');
-        onUnrecognizedBarcode(raw);
+        onUnrecognizedBarcode(parsed.barcode || raw);
       }
     }
   };
@@ -1278,6 +1297,7 @@ export const PosView: React.FC<PosViewProps> = ({
                   type="button"
                   onClick={() => {
                     setCatalogViewMode('grid');
+                    setCatalogPage(1);
                     soundService.click();
                   }}
                   className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 transition cursor-pointer ${
@@ -1294,6 +1314,7 @@ export const PosView: React.FC<PosViewProps> = ({
                   type="button"
                   onClick={() => {
                     setCatalogViewMode('compact');
+                    setCatalogPage(1);
                     soundService.click();
                   }}
                   className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 transition cursor-pointer ${
@@ -1324,7 +1345,10 @@ export const PosView: React.FC<PosViewProps> = ({
                   <button
                     key={id}
                     type="button"
-                    onClick={() => setPosDepartment(id)}
+                    onClick={() => {
+                      setPosDepartment(id);
+                      setCatalogPage(1);
+                    }}
                     className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer whitespace-nowrap ${
                       active
                         ? 'bg-[#083322] text-white'
@@ -1642,8 +1666,8 @@ export const PosView: React.FC<PosViewProps> = ({
                   <strong className="text-slate-800">
                     {showAllCatalog
                       ? `all ${availableMedicines.length}`
-                      : `${(catalogPage - 1) * itemsPerPage + 1}–${Math.min(
-                          catalogPage * itemsPerPage,
+                      : `${(safeCatalogPage - 1) * itemsPerPage + 1}–${Math.min(
+                          safeCatalogPage * itemsPerPage,
                           availableMedicines.length
                         )}`}
                   </strong>{' '}
@@ -1655,20 +1679,20 @@ export const PosView: React.FC<PosViewProps> = ({
                     <>
                       <button
                         type="button"
-                        disabled={catalogPage <= 1}
-                        onClick={() => setCatalogPage((p) => Math.max(1, p - 1))}
+                        disabled={safeCatalogPage <= 1}
+                        onClick={() => setCatalogPage((p) => Math.max(1, Math.min(p, totalPages) - 1))}
                         className="px-2 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 text-slate-700 font-semibold flex items-center gap-0.5 text-[11px] cursor-pointer"
                       >
                         <ChevronLeft className="w-3.5 h-3.5" />
                         <span>Prev</span>
                       </button>
                       <span className="px-2 py-0.5 font-mono tabular-nums font-bold text-[11px] text-slate-700">
-                        {catalogPage} / {totalPages}
+                        {safeCatalogPage} / {totalPages}
                       </span>
                       <button
                         type="button"
-                        disabled={catalogPage >= totalPages}
-                        onClick={() => setCatalogPage((p) => Math.min(totalPages, p + 1))}
+                        disabled={safeCatalogPage >= totalPages}
+                        onClick={() => setCatalogPage((p) => Math.min(totalPages, Math.min(p, totalPages) + 1))}
                         className="px-2 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 text-slate-700 font-semibold flex items-center gap-0.5 text-[11px] cursor-pointer"
                       >
                         <span>Next</span>
