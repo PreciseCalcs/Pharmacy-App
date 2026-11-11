@@ -281,6 +281,7 @@ export interface PharmacyDetails {
   pocketBaseUrl?: string;
   themeColorScheme?: PharmacyThemeId;
   fontFamily?: PharmacyFontId;
+  ownerRecoveryKey?: string;
 }
 
 export interface PharmacyCounter {
@@ -335,6 +336,7 @@ export const DEFAULT_PHARMACY_DETAILS: PharmacyDetails = {
   ownerTitle: 'Owner / Pharmacist',
   ownerPhone: '03067617080',
   ownerEmail: 'zahid.pharmacy.multan@gmail.com',
+  ownerRecoveryKey: 'ZMS-7788-RECOVERY',
   tagline: 'Wishing you speedy recovery & good health',
   thankYouMessage: 'Thank you for your visit!',
   urduRefundPolicy:

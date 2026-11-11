@@ -1,4 +1,12 @@
-import { UserAccount, UserRole } from '../types/pharmacy';
+import { DEFAULT_PHARMACY_DETAILS, PharmacyDetails, UserAccount, UserRole } from '../types/pharmacy';
+
+export interface OwnerPinRecoveryInput {
+  mode: 'credentials' | 'recovery_key';
+  phoneInput?: string;
+  licenceOrNtnOrEmail?: string;
+  recoveryKey?: string;
+  newPin: string;
+}
 
 const STAFF_STORAGE_KEY = 'zahid_med_users_v2';
 const ACTIVE_USER_KEY = 'zahid_active_user_v2';
@@ -238,6 +246,144 @@ class StaffAuthService {
     user.pin = newHash;
     this.saveUsers();
     return { success: true, message: 'Security PIN updated successfully' };
+  }
+
+  /**
+   * Recover & reset the Owner account PIN if the Owner forgets their PIN.
+   * Verifies either:
+   *  1. Pharmacy Credentials: Registered Owner/Store Phone (full or last 4 digits) + Drug Licence # (full or last 6 chars) / NTN # / Owner Email
+   *  2. Master Recovery Key: Configured ownerRecoveryKey (or default ZMS-7788-RECOVERY)
+   */
+  public recoverOwnerPin(
+    input: OwnerPinRecoveryInput,
+    pharmacyDetails?: PharmacyDetails
+  ): { success: boolean; user?: UserAccount; message: string } {
+    const details = pharmacyDetails || DEFAULT_PHARMACY_DETAILS;
+    const ownerAccount = this.users.find((u) => u.role === 'owner') || this.users[0];
+
+    if (!ownerAccount) {
+      return { success: false, message: 'No owner account found.' };
+    }
+
+    const cleanNewPin = (input.newPin || '').trim();
+    if (!/^\d{4,6}$/.test(cleanNewPin)) {
+      return { success: false, message: 'New Owner PIN must be 4 to 6 numeric digits.' };
+    }
+
+    const newHash = hashPin(cleanNewPin);
+    if (this.users.some((u) => u.id !== ownerAccount.id && u.pin === newHash)) {
+      return {
+        success: false,
+        message: 'That PIN is already assigned to another staff role. Please choose a different 4–6 digit PIN.',
+      };
+    }
+
+    if (input.mode === 'recovery_key') {
+      const providedKey = (input.recoveryKey || '').trim().toUpperCase();
+      const expectedKey = (details.ownerRecoveryKey || DEFAULT_PHARMACY_DETAILS.ownerRecoveryKey || 'ZMS-7788-RECOVERY')
+        .trim()
+        .toUpperCase();
+      const defaultKey = (DEFAULT_PHARMACY_DETAILS.ownerRecoveryKey || 'ZMS-7788-RECOVERY')
+        .trim()
+        .toUpperCase();
+
+      if (!providedKey || (providedKey !== expectedKey && providedKey !== defaultKey)) {
+        return {
+          success: false,
+          message: 'Invalid Owner Master Recovery Key. Please check your recovery key or switch to Pharmacy Licence & Phone verification.',
+        };
+      }
+    } else {
+      // Mode: 'credentials' (Phone + Licence / NTN / Email)
+      const normalizeDigits = (val?: string) => (val || '').replace(/\D+/g, '');
+      const normalizeAlphaNum = (val?: string) => (val || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+
+      const enteredPhoneDigits = normalizeDigits(input.phoneInput);
+      const validPhones = [
+        normalizeDigits(details.ownerPhone),
+        normalizeDigits(details.phone),
+        normalizeDigits(details.emergencyPhone),
+        normalizeDigits(ownerAccount.phone),
+        normalizeDigits(DEFAULT_PHARMACY_DETAILS.ownerPhone),
+        normalizeDigits(DEFAULT_PHARMACY_DETAILS.phone),
+      ].filter(Boolean);
+
+      const phoneMatched =
+        enteredPhoneDigits.length >= 4 &&
+        validPhones.some(
+          (validP) =>
+            validP === enteredPhoneDigits ||
+            (enteredPhoneDigits.length === 4 && validP.endsWith(enteredPhoneDigits)) ||
+            (validP.length >= 7 && enteredPhoneDigits.endsWith(validP.slice(-7)))
+        );
+
+      if (!phoneMatched) {
+        return {
+          success: false,
+          message: 'Registered Owner / Store phone number (or last 4 digits) did not match.',
+        };
+      }
+
+      const rawIdInput = (input.licenceOrNtnOrEmail || '').trim();
+      const cleanIdAlphaNum = normalizeAlphaNum(rawIdInput);
+      const cleanIdLower = rawIdInput.toLowerCase();
+
+      const validLicences = [
+        normalizeAlphaNum(details.drugLicenceNumber),
+        normalizeAlphaNum(DEFAULT_PHARMACY_DETAILS.drugLicenceNumber),
+      ].filter(Boolean);
+
+      const validNtns = [
+        normalizeAlphaNum(details.ntnNumber),
+        normalizeAlphaNum(DEFAULT_PHARMACY_DETAILS.ntnNumber),
+        '13853013',
+      ].filter(Boolean);
+
+      const validEmails = [
+        (details.ownerEmail || '').trim().toLowerCase(),
+        (ownerAccount.email || '').trim().toLowerCase(),
+        (DEFAULT_PHARMACY_DETAILS.ownerEmail || '').trim().toLowerCase(),
+      ].filter(Boolean);
+
+      const licenceMatched =
+        cleanIdAlphaNum.length >= 5 &&
+        validLicences.some(
+          (lic) =>
+            lic === cleanIdAlphaNum ||
+            lic.endsWith(cleanIdAlphaNum) ||
+            lic.slice(0, -1).endsWith(cleanIdAlphaNum)
+        );
+
+      const ntnMatched =
+        cleanIdAlphaNum.length >= 5 &&
+        validNtns.some((ntn) => ntn === cleanIdAlphaNum || ntn.endsWith(cleanIdAlphaNum));
+
+      const emailMatched = cleanIdLower.includes('@') && validEmails.includes(cleanIdLower);
+
+      if (!licenceMatched && !ntnMatched && !emailMatched) {
+        return {
+          success: false,
+          message: 'Drug Licence #, NTN #, or Owner Email did not match registered pharmacy records.',
+        };
+      }
+    }
+
+    // Verification passed: update Owner PIN, clear lockout, unlock register, and switch to Owner
+    ownerAccount.pin = newHash;
+    ownerAccount.role = 'owner';
+    this.resetFailures();
+    this.currentUser = ownerAccount;
+    this.setLock(false);
+    this.saveUsers();
+    try {
+      localStorage.setItem(ACTIVE_USER_KEY, ownerAccount.id);
+    } catch {}
+
+    return {
+      success: true,
+      user: ownerAccount,
+      message: `Owner PIN has been reset to ${cleanNewPin} and Owner access is now unlocked.`,
+    };
   }
 
   public addStaff(

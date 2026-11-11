@@ -87,6 +87,7 @@ html[data-pharmacy-theme="cobalt_hospital"] {
   --color-emerald-900: #1e3a8a;
   --color-emerald-950: #0b1e3b;
   --pharm-sidebar-bg: #0b1e3b;
+  --pharm-sidebar-footer: #07152b;
   --pharm-primary-bg: #102a52;
   --pharm-primary-hover: #173a70;
   --pharm-surface-dark: #0e2446;
@@ -94,6 +95,10 @@ html[data-pharmacy-theme="cobalt_hospital"] {
   --pharm-accent-hover: #60a5fa;
   --pharm-active-pill-bg: #e0edff;
   --pharm-active-pill-text: #0b1e3b;
+  --pharm-banner-bg: #0f2d5e;
+  --pharm-banner-border: #1e40af;
+  --pharm-banner-pill: #2563eb;
+  --pharm-banner-ntn: #091d3e;
 }
 
 /* Theme 3: Surgical Teal & Cyan */
@@ -110,6 +115,7 @@ html[data-pharmacy-theme="teal_surgical"] {
   --color-emerald-900: #134e4a;
   --color-emerald-950: #06282d;
   --pharm-sidebar-bg: #07292e;
+  --pharm-sidebar-footer: #041d21;
   --pharm-primary-bg: #0b3940;
   --pharm-primary-hover: #104c55;
   --pharm-surface-dark: #093238;
@@ -117,6 +123,10 @@ html[data-pharmacy-theme="teal_surgical"] {
   --pharm-accent-hover: #2dd4bf;
   --pharm-active-pill-bg: #dffaf6;
   --pharm-active-pill-text: #06282d;
+  --pharm-banner-bg: #0b464f;
+  --pharm-banner-border: #0f766e;
+  --pharm-banner-pill: #0d9488;
+  --pharm-banner-ntn: #06282d;
 }
 
 /* Theme 4: Apothecary Royal Slate & Indigo */
@@ -133,6 +143,7 @@ html[data-pharmacy-theme="apothecary_indigo"] {
   --color-emerald-900: #312e81;
   --color-emerald-950: #131b38;
   --pharm-sidebar-bg: #131b38;
+  --pharm-sidebar-footer: #0d1329;
   --pharm-primary-bg: #1c2752;
   --pharm-primary-hover: #26356e;
   --pharm-surface-dark: #182246;
@@ -140,6 +151,10 @@ html[data-pharmacy-theme="apothecary_indigo"] {
   --pharm-accent-hover: #818cf8;
   --pharm-active-pill-bg: #e4e9ff;
   --pharm-active-pill-text: #131b38;
+  --pharm-banner-bg: #1e2b63;
+  --pharm-banner-border: #3730a3;
+  --pharm-banner-pill: #4f46e5;
+  --pharm-banner-ntn: #131b38;
 }
 
 /* Theme 5: Botanical Herbal Sage & Olive */
@@ -156,6 +171,7 @@ html[data-pharmacy-theme="herbal_olive"] {
   --color-emerald-900: #365314;
   --color-emerald-950: #162a14;
   --pharm-sidebar-bg: #172a16;
+  --pharm-sidebar-footer: #101e0f;
   --pharm-primary-bg: #223b1f;
   --pharm-primary-hover: #2c4c28;
   --pharm-surface-dark: #1c331a;
@@ -163,6 +179,10 @@ html[data-pharmacy-theme="herbal_olive"] {
   --pharm-accent-hover: #a3e635;
   --pharm-active-pill-bg: #eafcd4;
   --pharm-active-pill-text: #172a16;
+  --pharm-banner-bg: #274723;
+  --pharm-banner-border: #3f6212;
+  --pharm-banner-pill: #4d7c0f;
+  --pharm-banner-ntn: #172a16;
 }
 
 /* Theme 6: Emergency Crimson & Ruby Care */
@@ -179,6 +199,7 @@ html[data-pharmacy-theme="burgundy_care"] {
   --color-emerald-900: #881337;
   --color-emerald-950: #2d0c16;
   --pharm-sidebar-bg: #2d0c16;
+  --pharm-sidebar-footer: #1f070e;
   --pharm-primary-bg: #421120;
   --pharm-primary-hover: #57172b;
   --pharm-surface-dark: #380f1b;
@@ -186,13 +207,42 @@ html[data-pharmacy-theme="burgundy_care"] {
   --pharm-accent-hover: #fb7185;
   --pharm-active-pill-bg: #ffe4e8;
   --pharm-active-pill-text: #2d0c16;
+  --pharm-banner-bg: #541529;
+  --pharm-banner-border: #9f1239;
+  --pharm-banner-pill: #be123c;
+  --pharm-banner-ntn: #2d0c16;
 }
 
-/* Apply custom sidebar & header overrides for non-default themes */
+/* Apply custom sidebar, footer syncbar, & hero banner overrides for non-default themes */
 html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .bg-\[\#072418\],
 html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .bg-\[\#06261a\],
 html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .bg-\[\#051c12\] {
   background-color: var(--pharm-sidebar-bg) !important;
+}
+
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .bg-\[\#062016\],
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .bg-\[\#051810\] {
+  background-color: var(--pharm-sidebar-footer) !important;
+}
+
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .bg-\[\#004d3d\] {
+  background-color: var(--pharm-banner-bg) !important;
+}
+
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .border-\[\#006652\] {
+  border-color: var(--pharm-banner-border) !important;
+}
+
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .bg-\[\#007a5e\] {
+  background-color: var(--pharm-banner-pill) !important;
+}
+
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .text-\[\#007a5e\] {
+  color: var(--pharm-banner-pill) !important;
+}
+
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .bg-\[\#07382c\] {
+  background-color: var(--pharm-banner-ntn) !important;
 }
 
 html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .bg-\[\#083322\],
@@ -202,7 +252,9 @@ html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .bg-\[\#
 
 html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .hover\:bg-\[\#0c432d\]:hover,
 html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .hover\:bg-\[\#0c3927\]:hover,
-html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .hover\:bg-\[\#12422e\]:hover {
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .hover\:bg-\[\#12422e\]:hover,
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .hover\:bg-\[\#114932\]:hover,
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .hover\:bg-\[\#0d3523\]:hover {
   background-color: var(--pharm-primary-hover) !important;
 }
 
@@ -232,8 +284,13 @@ html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .from-\[
   --tw-gradient-from: var(--pharm-sidebar-bg) var(--tw-gradient-from-position) !important;
 }
 
-html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .to-\[\#0c3927\] {
-  --tw-gradient-to: var(--pharm-primary-bg) var(--tw-gradient-to-position) !important;
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .via-\[\#0b3322\] {
+  --tw-gradient-via: var(--pharm-primary-bg) var(--tw-gradient-via-position) !important;
+}
+
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .to-\[\#0c3927\],
+html[data-pharmacy-theme]:not([data-pharmacy-theme="emerald_clinical"]) .to-\[\#0f402b\] {
+  --tw-gradient-to: var(--pharm-primary-hover) var(--tw-gradient-to-position) !important;
 }
 
 /* Custom Print Rules for Thermal Rolls (80mm / 58mm) and A4 Shelf Labels */

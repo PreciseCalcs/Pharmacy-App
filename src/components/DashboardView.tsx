@@ -392,12 +392,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <path
                     d="M58 22 A24 24 0 0 1 64 52"
                     fill="none"
-                    stroke="#10b981"
+                    stroke="var(--color-emerald-500, #10b981)"
                     strokeWidth="3.5"
                     strokeLinecap="round"
                   />
-                  <rect x="35" y="13" width="8" height="3" rx="1" fill="#10b981" />
-                  <rect x="37.5" y="10.5" width="3" height="8" rx="1" fill="#10b981" />
+                  <rect x="35" y="13" width="8" height="3" rx="1" fill="var(--color-emerald-500, #10b981)" />
+                  <rect x="37.5" y="10.5" width="3" height="8" rx="1" fill="var(--color-emerald-500, #10b981)" />
                   <text
                     x="17"
                     y="49"
@@ -411,7 +411,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <text
                     x="36"
                     y="49"
-                    fill="#10b981"
+                    fill="var(--color-emerald-500, #10b981)"
                     fontFamily="sans-serif"
                     fontWeight="900"
                     fontSize="24"
