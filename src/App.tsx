@@ -284,6 +284,10 @@ export default function App() {
         isGS1DataMatrix: Boolean(parsed.isGS1DataMatrix),
       });
 
+      // Always switch to the POS tab when a barcode is scanned from any view (Overview, Khata, Reports, etc.)
+      setActiveTab('pos');
+      setIsMobileMenuOpen(false);
+
       if (parsed.matchedSale) {
         console.log(
           '[Scanner] Routing to POS for Receipt Return:',
@@ -298,7 +302,6 @@ export default function App() {
           transaction: parsed.matchedSale,
           scanId: now,
         });
-        setActiveTab('pos');
       } else if (parsed.matchedMedicine) {
         const med = parsed.matchedMedicine;
         if (getTotalPiecesInStock(med) > 0 && !isExpired(med.expiryDate)) {
@@ -315,11 +318,10 @@ export default function App() {
             medicine: med,
             scanId: now,
           });
-          setActiveTab('pos');
         } else {
-          // Matched item is out of stock (0 packs) -> show options to Add to Short Book or Restock & Dispense
+          // Matched item is out of stock (0 packs) -> switch to POS and show options to Add to Short Book or Restock & Dispense
           console.log(
-            '[Scanner] Out-of-stock / expired item matched -> Opening LinkCodeModal:',
+            '[Scanner] Out-of-stock / expired item matched -> Navigating to POS & opening LinkCodeModal:',
             med.name
           );
           soundService.scanWarning();
@@ -328,9 +330,9 @@ export default function App() {
           setIsLinkCodeModalOpen(true);
         }
       } else {
-        // Item is not listed in catalog -> show options to List in Stock, Add to Short Book, or Link
+        // Item is not listed in catalog -> switch to POS and show options to List in Stock, Add to Short Book, or Link
         console.log(
-          '[Scanner] Unlisted barcode scanned -> Opening LinkCodeModal (List or Add to Short Book):',
+          '[Scanner] Unlisted barcode scanned -> Navigating to POS & opening LinkCodeModal (List or Add to Short Book):',
           cleanedRaw
         );
         soundService.scanWarning();
@@ -407,22 +409,28 @@ export default function App() {
       }
     };
 
-    const isLikelyBarcodeString = (code: string, avgMsPerKey: number) => {
+    const isKnownBarcodePattern = (code: string) => {
       const clean = code.replace(/^[\x00-\x20]+/, '').replace(/[\x00-\x20]+$/, '');
       if (clean.length < 4) return false;
-      // Known GS1 2D DataMatrix or Receipt or SKU patterns
-      if (
+      return (
         /^01\d{14}/.test(clean) ||
         /^\(01\)\d{14}/.test(clean) ||
-        /^\d{8,14}$/.test(clean) ||
+        /^\][A-Za-z]\d/.test(clean) ||
+        /^\d{6,14}$/.test(clean) ||
         /^ZMS-\d+/i.test(clean) ||
         /^MED-[A-Z0-9-]+$/i.test(clean) ||
         (clean.startsWith('{') && clean.endsWith('}'))
-      ) {
+      );
+    };
+
+    const isLikelyBarcodeString = (code: string, avgMsPerKey: number) => {
+      const clean = code.replace(/^[\x00-\x20]+/, '').replace(/[\x00-\x20]+$/, '');
+      if (clean.length < 4) return false;
+      if (isKnownBarcodePattern(clean)) {
         return true;
       }
-      // Rapid hardware scanner burst (< 85ms average per character across >= 5 chars)
-      return clean.length >= 5 && avgMsPerKey <= 85;
+      // Rapid hardware scanner burst (<= 110ms average per character across >= 5 chars)
+      return clean.length >= 5 && avgMsPerKey <= 110;
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -614,7 +622,7 @@ export default function App() {
 
       // Support Group Separator (ASCII 29 / FNC1) emitted by 2D GS1 DataMatrix guns
       if (e.key === 'GroupSeparator' || e.keyCode === 29) {
-        if (timeDiff <= 250 && barcodeBufferRef.current.length > 0) {
+        if (timeDiff <= 600 && barcodeBufferRef.current.length > 0) {
           barcodeBufferRef.current += '\x1d';
         }
         return;
@@ -626,7 +634,7 @@ export default function App() {
           scannerAutoFlushTimerRef.current = null;
         }
 
-        const candidateCode = barcodeBufferRef.current.trim();
+        let candidateCode = barcodeBufferRef.current.trim();
         const totalKeys = burstKeyCountRef.current;
         const burstDuration =
           burstStartTimeRef.current > 0 ? now - burstStartTimeRef.current : 0;
@@ -635,10 +643,26 @@ export default function App() {
 
         clearScannerBuffer();
 
+        // If an input on another tab (e.g., Khata, Reports, Overview, Inventory) was focused
+        // and received a full barcode string directly in its value, also allow fallback to target.value
+        const inputVal =
+          isInput &&
+          (target instanceof HTMLInputElement ||
+            target instanceof HTMLTextAreaElement)
+            ? (target.value || '').trim()
+            : '';
+
+        if (
+          inputVal.length > candidateCode.length &&
+          isKnownBarcodePattern(inputVal)
+        ) {
+          candidateCode = inputVal;
+        }
+
         // Check if this Enter/Tab terminates a valid hardware barcode scan
         const isRapidGunScan =
           candidateCode.length >= 4 &&
-          timeDiff < 300 &&
+          timeDiff < (isInput ? 800 : 1500) &&
           (!isInput || isLikelyBarcodeString(candidateCode, avgMsPerKey));
 
         if (isRapidGunScan) {
@@ -649,6 +673,7 @@ export default function App() {
             burstDurationMs: Math.round(burstDuration),
             avgMsPerKey: Math.round(avgMsPerKey),
             wasInputFocused: isInput,
+            fromTab: activeTab,
           });
           e.preventDefault();
           e.stopPropagation();
@@ -658,7 +683,10 @@ export default function App() {
           handleScannedCode(candidateCode);
         }
       } else if (e.key.length === 1 && !hasCtrlOrCmd && !e.altKey) {
-        if (timeDiff > 180) {
+        // Allow a wider inter-character gap (1200ms when no input is focused, 450ms when an input is focused)
+        // so wireless/Bluetooth guns or multi-packet 2D GS1 DataMatrix scans are never truncated mid-stream
+        const maxGapMs = isInput ? 450 : 1200;
+        if (timeDiff > maxGapMs) {
           barcodeBufferRef.current = e.key;
           burstStartTimeRef.current = now;
           burstKeyCountRef.current = 1;
@@ -680,17 +708,20 @@ export default function App() {
         const currentAvgMs =
           currentCount > 1 ? currentDuration / (currentCount - 1) : 999;
 
-        if (
-          currentBuffer.length >= 8 &&
-          currentAvgMs <= 55 &&
-          isLikelyBarcodeString(currentBuffer, currentAvgMs)
-        ) {
+        const shouldAutoFlush = isInput
+          ? currentBuffer.length >= 6 &&
+            currentAvgMs <= 90 &&
+            isLikelyBarcodeString(currentBuffer, currentAvgMs)
+          : currentBuffer.length >= 4 &&
+            (currentAvgMs <= 120 || isKnownBarcodePattern(currentBuffer));
+
+        if (shouldAutoFlush) {
           const activeTarget = target;
           const wasFocusedInput = isInput;
           scannerAutoFlushTimerRef.current = window.setTimeout(() => {
             const finalCode = barcodeBufferRef.current.trim();
             clearScannerBuffer();
-            if (finalCode.length >= 8) {
+            if (finalCode.length >= 4) {
               console.log(
                 '[Scanner Buffer] Auto-flushing suffixless hardware scanner burst:',
                 {
@@ -698,6 +729,7 @@ export default function App() {
                   charCount: finalCode.length,
                   avgMsPerKey: Math.round(currentAvgMs),
                   wasInputFocused: wasFocusedInput,
+                  fromTab: activeTab,
                 }
               );
               if (wasFocusedInput) {
@@ -705,20 +737,54 @@ export default function App() {
               }
               handleScannedCode(finalCode);
             }
-          }, 180);
+          }, 240);
         }
       }
     };
 
+    const handlePaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput = Boolean(
+        target &&
+          (target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.isContentEditable)
+      );
+      const isLocalScannerField =
+        target?.getAttribute?.('data-scanner-local') === 'true';
+      if (isMedicineModalOpen || isLinkCodeModalOpen || isLocalScannerField) {
+        return;
+      }
+
+      const pasted = (e.clipboardData?.getData('text') || '').trim();
+      if (!pasted) return;
+
+      // If user pastes a barcode while on any non-POS tab (or with no input focused), route directly to POS
+      if ((!isInput && pasted.length >= 4) || (activeTab !== 'pos' && isKnownBarcodePattern(pasted))) {
+        console.log('[Scanner Buffer] Intercepted barcode paste on tab:', {
+          fromTab: activeTab,
+          pasted,
+          wasInputFocused: isInput,
+        });
+        e.preventDefault();
+        e.stopPropagation();
+        clearScannerBuffer();
+        handleScannedCode(pasted);
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('paste', handlePaste, true);
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('paste', handlePaste, true);
       if (scannerAutoFlushTimerRef.current !== null) {
         window.clearTimeout(scannerAutoFlushTimerRef.current);
         scannerAutoFlushTimerRef.current = null;
       }
     };
   }, [
+    activeTab,
     medicines,
     handleScannedCode,
     handleNavigateTab,

@@ -157,6 +157,39 @@ export const PosView: React.FC<PosViewProps> = ({
   const [isProcessingReturn, setIsProcessingReturn] = useState(false);
   const [returnSuccessBanner, setReturnSuccessBanner] = useState<string | null>(null);
 
+  const [scanFlash, setScanFlash] = useState<{
+    id: number;
+    label: string;
+    variant: 'emerald' | 'rose';
+  } | null>(null);
+  const scanFlashTimerRef = useRef<number | null>(null);
+
+  const triggerScanFlash = useCallback(
+    (label: string, variant: 'emerald' | 'rose' = 'emerald') => {
+      if (scanFlashTimerRef.current !== null) {
+        window.clearTimeout(scanFlashTimerRef.current);
+      }
+      setScanFlash({
+        id: Date.now(),
+        label,
+        variant,
+      });
+      scanFlashTimerRef.current = window.setTimeout(() => {
+        setScanFlash(null);
+        scanFlashTimerRef.current = null;
+      }, 900);
+    },
+    []
+  );
+
+  useEffect(() => {
+    return () => {
+      if (scanFlashTimerRef.current !== null) {
+        window.clearTimeout(scanFlashTimerRef.current);
+      }
+    };
+  }, []);
+
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const receiptScanInputRef = useRef<HTMLInputElement>(null);
   const returnDrawerRef = useRef<HTMLDivElement>(null);
@@ -334,10 +367,14 @@ export const PosView: React.FC<PosViewProps> = ({
       });
       setSearchQuery('');
       addToCart(externalScannedItem.medicine, 'pack');
+      triggerScanFlash(
+        `${externalScannedItem.medicine.name} (${externalScannedItem.medicine.strength})`,
+        'emerald'
+      );
       onExternalScanConsumed?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [externalScannedItem, addToCart]);
+  }, [externalScannedItem, addToCart, triggerScanFlash]);
 
   // Consume external receipt barcode scans (from Camera Scanner or global Hardware Gun)
   useEffect(() => {
@@ -347,10 +384,14 @@ export const PosView: React.FC<PosViewProps> = ({
       setMatchedReceiptForReturn(externalScannedReceipt.transaction);
       setReceiptLookupInput(externalScannedReceipt.transaction.invoiceNumber);
       setReturnLookupError(null);
+      triggerScanFlash(
+        `Receipt #${externalScannedReceipt.transaction.invoiceNumber}`,
+        'rose'
+      );
       onExternalReceiptScanConsumed?.();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [externalScannedReceipt]);
+  }, [externalScannedReceipt, triggerScanFlash]);
 
   const handleLookupReceipt = (rawQuery?: string) => {
     const query = (rawQuery ?? receiptLookupInput).trim();
@@ -547,6 +588,7 @@ export const PosView: React.FC<PosViewProps> = ({
         setMatchedReceiptForReturn(parsed.matchedSale);
         setReceiptLookupInput(parsed.matchedSale.invoiceNumber);
         setReturnLookupError(null);
+        triggerScanFlash(`Receipt #${parsed.matchedSale.invoiceNumber}`, 'rose');
         return;
       }
 
@@ -556,6 +598,10 @@ export const PosView: React.FC<PosViewProps> = ({
           !isExpired(parsed.matchedMedicine.expiryDate)
         ) {
           addToCart(parsed.matchedMedicine, 'pack');
+          triggerScanFlash(
+            `${parsed.matchedMedicine.name} (${parsed.matchedMedicine.strength})`,
+            'emerald'
+          );
           setSearchQuery('');
           return;
         }
@@ -569,6 +615,10 @@ export const PosView: React.FC<PosViewProps> = ({
 
       if (availableMedicines.length === 1) {
         addToCart(availableMedicines[0], 'pack');
+        triggerScanFlash(
+          `${availableMedicines[0].name} (${availableMedicines[0].strength})`,
+          'emerald'
+        );
         setSearchQuery('');
         return;
       }
@@ -789,12 +839,63 @@ export const PosView: React.FC<PosViewProps> = ({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 relative">
+      {/* Subtle Screen-Edge Flash Animation when an External / Barcode Scan is Processed */}
+      {scanFlash && (
+        <div
+          key={scanFlash.id}
+          aria-hidden="true"
+          className={`pointer-events-none fixed inset-0 z-50 transition-opacity duration-500 animate-in fade-in ${
+            scanFlash.variant === 'rose'
+              ? 'border-[3px] border-rose-400/75 shadow-[inset_0_0_52px_rgba(244,63,94,0.26)]'
+              : 'border-[3px] border-emerald-400/80 shadow-[inset_0_0_52px_rgba(16,185,129,0.28)]'
+          }`}
+        >
+          {/* Top / Bottom / Side Subtle Edge Glow Strips */}
+          <div
+            className={`absolute top-0 inset-x-0 h-1.5 ${
+              scanFlash.variant === 'rose'
+                ? 'bg-gradient-to-r from-transparent via-rose-400 to-transparent'
+                : 'bg-gradient-to-r from-transparent via-emerald-400 to-transparent'
+            }`}
+          />
+          <div
+            className={`absolute bottom-0 inset-x-0 h-1.5 ${
+              scanFlash.variant === 'rose'
+                ? 'bg-gradient-to-r from-transparent via-rose-400 to-transparent'
+                : 'bg-gradient-to-r from-transparent via-emerald-400 to-transparent'
+            }`}
+          />
+          <div
+            className={`absolute inset-y-0 left-0 w-1.5 ${
+              scanFlash.variant === 'rose'
+                ? 'bg-gradient-to-b from-transparent via-rose-400 to-transparent'
+                : 'bg-gradient-to-b from-transparent via-emerald-400 to-transparent'
+            }`}
+          />
+          <div
+            className={`absolute inset-y-0 right-0 w-1.5 ${
+              scanFlash.variant === 'rose'
+                ? 'bg-gradient-to-b from-transparent via-rose-400 to-transparent'
+                : 'bg-gradient-to-b from-transparent via-emerald-400 to-transparent'
+            }`}
+          />
+        </div>
+      )}
+
       {/* Main POS Workspace: 7 Cols Catalog & Drawers + 5 Cols Sticky Register */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
         {/* Left Column: Medicine Catalog & Fast Scan (7 Cols) */}
         <div className="lg:col-span-7 space-y-4">
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs">
+          <div
+            className={`bg-white rounded-2xl border p-4 shadow-2xs transition-all duration-300 ${
+              scanFlash
+                ? scanFlash.variant === 'rose'
+                  ? 'border-rose-400 ring-2 ring-rose-300/60'
+                  : 'border-emerald-400 ring-2 ring-emerald-300/60'
+                : 'border-slate-200'
+            }`}
+          >
             {/* Sleek Single-Row POS Header (No Awkward Multi-Line Wrapping) */}
             <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100 mb-3">
               <div className="flex items-center gap-2.5 min-w-0">
@@ -1756,7 +1857,13 @@ export const PosView: React.FC<PosViewProps> = ({
 
         {/* Right Column: Sticky Checkout Cart & Billing Register (5 Cols — Compact so Submit Button fits on 768p laptops!) */}
         <div className="lg:col-span-5 lg:sticky lg:top-16">
-          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+          <div
+            className={`bg-white rounded-2xl border overflow-hidden shadow-2xs transition-all duration-300 ${
+              scanFlash && scanFlash.variant === 'emerald'
+                ? 'border-emerald-400 ring-2 ring-emerald-400/70 shadow-lg shadow-emerald-500/15'
+                : 'border-slate-200'
+            }`}
+          >
             {/* High-Contrast Register Header Strip */}
             <div className="bg-[#083322] text-white px-4 py-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
