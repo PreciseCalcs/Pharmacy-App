@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Pill, Save, Sparkles, AlertCircle, Upload, Trash2, Image as ImageIcon, ShoppingBag, Heart, RefreshCw, Barcode, QrCode, CheckCircle2 } from 'lucide-react';
-import { DosageForm, MedicineCategory, MedicineItem, ProductDepartment } from '../types/pharmacy';
+import { X, Pill, Save, Sparkles, AlertCircle, Upload, Trash2, Image as ImageIcon, ShoppingBag, Heart, RefreshCw, Barcode, QrCode, CheckCircle2, Tag, Plus, Layers } from 'lucide-react';
+import { DosageForm, MedicineCategory, MedicineItem, MedicineStockBatchEntry, ProductDepartment } from '../types/pharmacy';
 import { soundService } from '../services/soundAlerts';
-import { getExpiryBadgeMeta } from '../utils/pharmacyHelpers';
+import { getDaysUntilExpiry, getExpiryBadgeMeta, isExpired } from '../utils/pharmacyHelpers';
 import { BarcodeGenerator, generateSmartBarcode } from './BarcodeGenerator';
 import { parseScannedCode, ParsedCodeResult } from '../utils/codeParser';
 
@@ -60,6 +60,51 @@ const DOSAGE_FORMS: DosageForm[] = [
   'Other',
 ];
 
+function deriveFefoSummaryFromBatches(
+  batches: MedicineStockBatchEntry[],
+  fallbackBatch: string,
+  fallbackExpiry: string
+): {
+  totalPacks: number;
+  totalLoose: number;
+  primaryBatch: string;
+  primaryExpiry: string;
+} {
+  if (!batches || batches.length === 0) {
+    return {
+      totalPacks: 0,
+      totalLoose: 0,
+      primaryBatch: fallbackBatch || 'B-101',
+      primaryExpiry: fallbackExpiry || '2027-12-31',
+    };
+  }
+
+  const totalPacks = batches.reduce((sum, b) => sum + Math.max(0, Number(b.stockPacks) || 0), 0);
+  const totalLoose = batches.reduce((sum, b) => sum + Math.max(0, Number(b.stockLoose) || 0), 0);
+
+  // Pick FEFO (earliest non-expired batch with stock, or earliest overall)
+  const sorted = [...batches].sort((a, b) => {
+    const dA = a.expiryDate ? getDaysUntilExpiry(a.expiryDate) : 9999;
+    const dB = b.expiryDate ? getDaysUntilExpiry(b.expiryDate) : 9999;
+    return dA - dB;
+  });
+
+  const activeNonExpired = sorted.filter(
+    (b) =>
+      (b.stockPacks > 0 || (b.stockLoose || 0) > 0) &&
+      (!b.expiryDate || !isExpired(b.expiryDate))
+  );
+  const activeAny = sorted.filter((b) => b.stockPacks > 0 || (b.stockLoose || 0) > 0);
+  const chosen = activeNonExpired[0] || activeAny[0] || sorted[0];
+
+  return {
+    totalPacks,
+    totalLoose,
+    primaryBatch: chosen?.batchNumber?.trim() || fallbackBatch || 'B-101',
+    primaryExpiry: chosen?.expiryDate?.trim() || fallbackExpiry || '2027-12-31',
+  };
+}
+
 export const MedicineModal: React.FC<MedicineModalProps> = ({
   isOpen,
   onClose,
@@ -86,6 +131,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
     minThresholdPacks: 5,
     batchNumber: 'B-101',
     expiryDate: '2027-12-31',
+    stockBatches: [],
     shelfLocation: 'Rack A-1',
     manufacturer: 'Local Pharma',
     requiresPrescription: false,
@@ -105,7 +151,33 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
     setScanBoxInput('');
     setLastParsedBox(null);
     if (medicine) {
-      setFormData({ ...medicine });
+      const existingBatches: MedicineStockBatchEntry[] =
+        Array.isArray(medicine.stockBatches) && medicine.stockBatches.length > 0
+          ? medicine.stockBatches.map((b) => ({ ...b }))
+          : [
+              {
+                id: `batch_${medicine.id}_1`,
+                batchNumber: medicine.batchNumber || 'B-101',
+                expiryDate: medicine.expiryDate || '2027-12-31',
+                stockPacks: medicine.currentStockPacks || 0,
+                stockLoose: medicine.currentStockLoose || 0,
+              },
+            ];
+
+      const parsedScan = initialScannedCode?.trim()
+        ? parseScannedCode(initialScannedCode.trim(), [])
+        : null;
+
+      if (parsedScan && initialScannedCode) {
+        setScanBoxInput(initialScannedCode.trim());
+        setLastParsedBox(parsedScan);
+      }
+
+      setFormData({
+        ...medicine,
+        barcode: parsedScan?.barcode || medicine.barcode,
+        stockBatches: existingBatches,
+      });
     } else {
       // Default new medicine template
       const randomCode = `8964${Math.floor(10000000 + Math.random() * 90000000)}`;
@@ -131,6 +203,10 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
           ? Math.round(parsedScan.unitRetailPrice * 0.85 * 100) / 100
           : 200;
 
+      const defaultBatchNo =
+        parsedScan?.batchNumber || `B-${Math.floor(1000 + Math.random() * 9000)}`;
+      const defaultExpiry = parsedScan?.expiryDate || '2027-12-31';
+
       setFormData({
         name: parsedScan?.productName || '',
         genericName: parsedScan?.productName
@@ -150,8 +226,17 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
         currentStockPacks: 10,
         currentStockLoose: 0,
         minThresholdPacks: 5,
-        batchNumber: parsedScan?.batchNumber || `B-${Math.floor(1000 + Math.random() * 9000)}`,
-        expiryDate: parsedScan?.expiryDate || '2027-12-31',
+        batchNumber: defaultBatchNo,
+        expiryDate: defaultExpiry,
+        stockBatches: [
+          {
+            id: `batch_init_${Date.now()}`,
+            batchNumber: defaultBatchNo,
+            expiryDate: defaultExpiry,
+            stockPacks: 10,
+            stockLoose: 0,
+          },
+        ],
         shelfLocation: 'Rack A-01',
         manufacturer: 'GSK Pakistan',
         requiresPrescription: false,
@@ -161,6 +246,38 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
       });
     }
   }, [medicine, isOpen, initialScannedCode]);
+
+  const handleUpdateStockBatches = (nextBatches: MedicineStockBatchEntry[]) => {
+    setFormData((prev) => {
+      const summary = deriveFefoSummaryFromBatches(
+        nextBatches,
+        prev.batchNumber || 'B-101',
+        prev.expiryDate || '2027-12-31'
+      );
+      return {
+        ...prev,
+        stockBatches: nextBatches,
+        currentStockPacks: summary.totalPacks,
+        currentStockLoose: summary.totalLoose,
+        batchNumber: summary.primaryBatch,
+        expiryDate: summary.primaryExpiry,
+      };
+    });
+  };
+
+  const handleAddBatchEntry = (prefillBatch?: string, prefillExpiry?: string, prefillPacks = 5) => {
+    const currentList = Array.isArray(formData.stockBatches) ? [...formData.stockBatches] : [];
+    const newEntry: MedicineStockBatchEntry = {
+      id: `batch_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      batchNumber: prefillBatch ?? `B-${Math.floor(100 + Math.random() * 900)}`,
+      expiryDate: prefillExpiry ?? '2027-06-30',
+      stockPacks: prefillPacks,
+      stockLoose: 0,
+      receivedAt: new Date().toISOString().slice(0, 10),
+    };
+    handleUpdateStockBatches([...currentList, newEntry]);
+    soundService.click();
+  };
 
   // Handle product photo upload as base64
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -242,6 +359,23 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
           ? `${parsed.productName}${parsed.dosageFormLabel ? ` (${parsed.dosageFormLabel})` : ''}`
           : prev.genericName || '');
 
+      const nextBatch = parsed.batchNumber || prev.batchNumber || 'B-101';
+      const nextExpiry = parsed.expiryDate || prev.expiryDate || '2027-12-31';
+
+      const prevBatches = Array.isArray(prev.stockBatches) ? [...prev.stockBatches] : [];
+      let nextBatches = prevBatches;
+      if (prevBatches.length <= 1) {
+        nextBatches = [
+          {
+            id: prevBatches[0]?.id || `batch_${Date.now()}`,
+            batchNumber: nextBatch,
+            expiryDate: nextExpiry,
+            stockPacks: prevBatches[0]?.stockPacks ?? prev.currentStockPacks ?? 10,
+            stockLoose: prevBatches[0]?.stockLoose ?? prev.currentStockLoose ?? 0,
+          },
+        ];
+      }
+
       return {
         ...prev,
         barcode: parsed.barcode || prev.barcode,
@@ -250,8 +384,9 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
         strength: parsed.strength || prev.strength,
         dosageForm: parsed.dosageForm || prev.dosageForm,
         category: parsed.category || prev.category,
-        batchNumber: parsed.batchNumber || prev.batchNumber,
-        expiryDate: parsed.expiryDate || prev.expiryDate,
+        batchNumber: nextBatch,
+        expiryDate: nextExpiry,
+        stockBatches: nextBatches,
         unitsPerPack: validUnits,
         unitRetailPrice: nextRetail,
         unitCostPrice: nextCost,
@@ -686,6 +821,138 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                 />
               </div>
             </div>
+
+            {/* Wholesale / Special Product Discount Configuration Strip */}
+            <div className="mt-3 p-3 rounded-xl bg-indigo-50/60 border border-indigo-200 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Tag className="w-3.5 h-3.5 text-indigo-700" />
+                  <span className="font-bold text-indigo-950 text-xs">
+                    Wholesale / Special Product Discount Tag (Optional)
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {[0, 5, 8, 10, 12, 15, 20].map((pct) => {
+                    const currentPct = Number(formData.specialDiscountPercent || 0);
+                    return (
+                      <button
+                        key={pct}
+                        type="button"
+                        onClick={() =>
+                          setFormData({
+                            ...formData,
+                            specialDiscountPercent: pct,
+                            specialDiscountLabel:
+                              pct > 0
+                                ? formData.specialDiscountLabel || 'Wholesale'
+                                : '',
+                            specialDiscountMinPacks:
+                              pct > 0 ? formData.specialDiscountMinPacks || 1 : 1,
+                          })
+                        }
+                        className={`px-2 py-0.5 rounded-md font-mono font-bold text-[10px] border transition cursor-pointer ${
+                          currentPct === pct
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300'
+                        }`}
+                      >
+                        {pct === 0 ? 'Off' : `${pct}%`}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-indigo-900/75 mb-1">
+                    Special Discount (%)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={90}
+                    step={0.5}
+                    placeholder="e.g. 10"
+                    value={formData.specialDiscountPercent || ''}
+                    onChange={(e) => {
+                      const val = Math.max(0, Math.min(90, parseFloat(e.target.value) || 0));
+                      setFormData({
+                        ...formData,
+                        specialDiscountPercent: val,
+                        specialDiscountLabel:
+                          val > 0 ? formData.specialDiscountLabel || 'Wholesale' : '',
+                      });
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-white font-mono font-bold text-slate-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-indigo-900/75 mb-1">
+                    Tag Badge Label
+                  </label>
+                  <select
+                    value={formData.specialDiscountLabel || 'Wholesale'}
+                    onChange={(e) =>
+                      setFormData({ ...formData, specialDiscountLabel: e.target.value })
+                    }
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-white font-semibold text-slate-800"
+                  >
+                    <option value="Wholesale">Wholesale</option>
+                    <option value="Trade Offer">Trade Offer</option>
+                    <option value="Bulk Deal">Bulk Deal</option>
+                    <option value="Clinic Rate">Clinic Rate</option>
+                    <option value="Special">Special</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-indigo-900/75 mb-1">
+                    Min Packs Required
+                  </label>
+                  <select
+                    value={formData.specialDiscountMinPacks || 1}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        specialDiscountMinPacks: parseInt(e.target.value, 10) || 1,
+                      })
+                    }
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-white font-mono font-semibold text-slate-800"
+                  >
+                    <option value={1}>1+ Pack (Any Pack)</option>
+                    <option value={2}>2+ Packs</option>
+                    <option value={3}>3+ Packs</option>
+                    <option value={5}>5+ Packs (Bulk)</option>
+                    <option value={10}>10+ Packs (Carton)</option>
+                  </select>
+                </div>
+              </div>
+
+              {Number(formData.specialDiscountPercent || 0) > 0 && (
+                <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono tabular-nums text-indigo-950">
+                  <span>
+                    Tag Preview:{' '}
+                    <strong className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 font-sans">
+                      {formData.specialDiscountLabel || 'Wholesale'} -
+                      {formData.specialDiscountPercent}%
+                    </strong>
+                  </span>
+                  <span>
+                    Net Wholesale Pack:{' '}
+                    <strong>
+                      Rs.{' '}
+                      {(
+                        (formData.unitRetailPrice || 0) *
+                        (1 - Number(formData.specialDiscountPercent || 0) / 100)
+                      ).toFixed(2)}
+                    </strong>{' '}
+                    (Cost: Rs. {formData.unitCostPrice || 0})
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Section: Stock, Batch & Expiry */}
@@ -700,7 +967,30 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                   type="number"
                   min={0}
                   value={formData.currentStockPacks || 0}
-                  onChange={(e) => setFormData({ ...formData, currentStockPacks: parseInt(e.target.value) || 0 })}
+                  onChange={(e) => {
+                    const nextPacks = Math.max(0, parseInt(e.target.value, 10) || 0);
+                    const batches = Array.isArray(formData.stockBatches)
+                      ? [...formData.stockBatches]
+                      : [];
+                    if (batches.length <= 1) {
+                      const nextBatches: MedicineStockBatchEntry[] = [
+                        {
+                          id: batches[0]?.id || `batch_${Date.now()}`,
+                          batchNumber: formData.batchNumber || 'B-101',
+                          expiryDate: formData.expiryDate || '2027-12-31',
+                          stockPacks: nextPacks,
+                          stockLoose: formData.currentStockLoose || 0,
+                        },
+                      ];
+                      setFormData({
+                        ...formData,
+                        currentStockPacks: nextPacks,
+                        stockBatches: nextBatches,
+                      });
+                    } else {
+                      setFormData({ ...formData, currentStockPacks: nextPacks });
+                    }
+                  }}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono"
                 />
               </div>
@@ -711,7 +1001,30 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                   type="number"
                   min={0}
                   value={formData.currentStockLoose || 0}
-                  onChange={(e) => setFormData({ ...formData, currentStockLoose: parseInt(e.target.value) || 0 })}
+                  onChange={(e) => {
+                    const nextLoose = Math.max(0, parseInt(e.target.value, 10) || 0);
+                    const batches = Array.isArray(formData.stockBatches)
+                      ? [...formData.stockBatches]
+                      : [];
+                    if (batches.length <= 1) {
+                      const nextBatches: MedicineStockBatchEntry[] = [
+                        {
+                          id: batches[0]?.id || `batch_${Date.now()}`,
+                          batchNumber: formData.batchNumber || 'B-101',
+                          expiryDate: formData.expiryDate || '2027-12-31',
+                          stockPacks: formData.currentStockPacks || 0,
+                          stockLoose: nextLoose,
+                        },
+                      ];
+                      setFormData({
+                        ...formData,
+                        currentStockLoose: nextLoose,
+                        stockBatches: nextBatches,
+                      });
+                    } else {
+                      setFormData({ ...formData, currentStockLoose: nextLoose });
+                    }
+                  }}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono"
                 />
               </div>
@@ -739,12 +1052,36 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Batch Number</label>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Primary Batch # (FEFO)
+                </label>
                 <input
                   type="text"
                   placeholder="e.g. B-7041"
                   value={formData.batchNumber || ''}
-                  onChange={(e) => setFormData({ ...formData, batchNumber: e.target.value })}
+                  onChange={(e) => {
+                    const nextBatch = e.target.value;
+                    const batches = Array.isArray(formData.stockBatches)
+                      ? [...formData.stockBatches]
+                      : [];
+                    if (batches.length <= 1) {
+                      setFormData({
+                        ...formData,
+                        batchNumber: nextBatch,
+                        stockBatches: [
+                          {
+                            id: batches[0]?.id || `batch_${Date.now()}`,
+                            batchNumber: nextBatch,
+                            expiryDate: formData.expiryDate || '2027-12-31',
+                            stockPacks: formData.currentStockPacks || 0,
+                            stockLoose: formData.currentStockLoose || 0,
+                          },
+                        ],
+                      });
+                    } else {
+                      setFormData({ ...formData, batchNumber: nextBatch });
+                    }
+                  }}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono"
                 />
               </div>
@@ -752,7 +1089,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
               <div className="sm:col-span-2">
                 <div className="flex items-center justify-between mb-1">
                   <label className="block font-semibold text-slate-700">
-                    Expiry Date (YYYY-MM-DD) <span className="text-rose-500">*</span>
+                    Primary Expiry Date (YYYY-MM-DD) <span className="text-rose-500">*</span>
                   </label>
                   {formData.expiryDate && (
                     <span
@@ -769,7 +1106,29 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                   type="date"
                   required
                   value={formData.expiryDate || ''}
-                  onChange={(e) => setFormData({ ...formData, expiryDate: e.target.value })}
+                  onChange={(e) => {
+                    const nextExp = e.target.value;
+                    const batches = Array.isArray(formData.stockBatches)
+                      ? [...formData.stockBatches]
+                      : [];
+                    if (batches.length <= 1) {
+                      setFormData({
+                        ...formData,
+                        expiryDate: nextExp,
+                        stockBatches: [
+                          {
+                            id: batches[0]?.id || `batch_${Date.now()}`,
+                            batchNumber: formData.batchNumber || 'B-101',
+                            expiryDate: nextExp,
+                            stockPacks: formData.currentStockPacks || 0,
+                            stockLoose: formData.currentStockLoose || 0,
+                          },
+                        ],
+                      });
+                    } else {
+                      setFormData({ ...formData, expiryDate: nextExp });
+                    }
+                  }}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
                 <div className="flex flex-wrap items-center gap-1 mt-1.5">
@@ -788,10 +1147,30 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                       onClick={() => {
                         const d = new Date();
                         d.setDate(d.getDate() + preset.days);
-                        setFormData({
-                          ...formData,
-                          expiryDate: d.toISOString().slice(0, 10),
-                        });
+                        const nextExp = d.toISOString().slice(0, 10);
+                        const batches = Array.isArray(formData.stockBatches)
+                          ? [...formData.stockBatches]
+                          : [];
+                        if (batches.length <= 1) {
+                          setFormData({
+                            ...formData,
+                            expiryDate: nextExp,
+                            stockBatches: [
+                              {
+                                id: batches[0]?.id || `batch_${Date.now()}`,
+                                batchNumber: formData.batchNumber || 'B-101',
+                                expiryDate: nextExp,
+                                stockPacks: formData.currentStockPacks || 0,
+                                stockLoose: formData.currentStockLoose || 0,
+                              },
+                            ],
+                          });
+                        } else {
+                          setFormData({
+                            ...formData,
+                            expiryDate: nextExp,
+                          });
+                        }
                         soundService.click();
                       }}
                       className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 font-medium border border-slate-200 transition cursor-pointer"
@@ -800,6 +1179,166 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* Per-Stock-Entry Batch & Expiry Tracking Panel */}
+              <div className="col-span-2 sm:col-span-4 mt-1 p-3 rounded-xl bg-emerald-50/50 border border-emerald-200 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5 text-emerald-700" />
+                      <span>
+                        Stock Batch Entries — Per-Entry Batch # &amp; Expiry Tracking (Optional)
+                      </span>
+                    </h5>
+                    <p className="text-[11px] text-slate-500">
+                      Track separate deliveries with distinct batch numbers and expiry dates. POS automatically warns if any stock batch is near expiry.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    {lastParsedBox && (lastParsedBox.batchNumber || lastParsedBox.expiryDate) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleAddBatchEntry(
+                            lastParsedBox.batchNumber || `B-${Math.floor(100 + Math.random() * 900)}`,
+                            lastParsedBox.expiryDate || '2027-09-30',
+                            5
+                          )
+                        }
+                        className="px-2.5 py-1.5 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-950 font-bold text-[11px] flex items-center gap-1 border border-emerald-300 transition cursor-pointer"
+                      >
+                        <QrCode className="w-3 h-3 text-emerald-700" />
+                        <span>+ Add Scanned 2D Batch ({lastParsedBox.batchNumber || 'New'})</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleAddBatchEntry()}
+                      className="px-2.5 py-1.5 rounded-lg bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-[11px] flex items-center gap-1 transition cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-emerald-300" />
+                      <span>+ Add Stock Batch Entry</span>
+                    </button>
+                  </div>
+                </div>
+
+                {Array.isArray(formData.stockBatches) && formData.stockBatches.length > 0 && (
+                  <div className="space-y-1.5">
+                    {formData.stockBatches.map((entry, idx) => {
+                      const expMeta = entry.expiryDate
+                        ? getExpiryBadgeMeta(entry.expiryDate)
+                        : null;
+                      return (
+                        <div
+                          key={entry.id || idx}
+                          className="p-2 rounded-lg bg-white border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-center"
+                        >
+                          <div className="sm:col-span-3">
+                            <label className="block text-[9px] font-bold uppercase text-slate-500 mb-0.5">
+                              Batch # (Entry #{idx + 1})
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Optional Batch #"
+                              value={entry.batchNumber || ''}
+                              onChange={(e) => {
+                                const next = [...(formData.stockBatches || [])];
+                                next[idx] = { ...next[idx], batchNumber: e.target.value };
+                                handleUpdateStockBatches(next);
+                              }}
+                              className="w-full px-2 py-1 rounded border border-slate-300 font-mono text-xs font-bold text-slate-900"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-4">
+                            <div className="flex items-center justify-between mb-0.5">
+                              <label className="text-[9px] font-bold uppercase text-slate-500">
+                                Expiry Date (Optional)
+                              </label>
+                              {expMeta && (
+                                <span
+                                  className={`text-[9px] font-bold px-1.5 py-0.1 rounded ${expMeta.badgeClass}`}
+                                >
+                                  {expMeta.shortLabel}
+                                </span>
+                              )}
+                            </div>
+                            <input
+                              type="date"
+                              value={entry.expiryDate || ''}
+                              onChange={(e) => {
+                                const next = [...(formData.stockBatches || [])];
+                                next[idx] = { ...next[idx], expiryDate: e.target.value };
+                                handleUpdateStockBatches(next);
+                              }}
+                              className="w-full px-2 py-1 rounded border border-slate-300 font-mono text-xs text-slate-900"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-2">
+                            <label className="block text-[9px] font-bold uppercase text-slate-500 mb-0.5">
+                              Packs
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              value={entry.stockPacks}
+                              onChange={(e) => {
+                                const next = [...(formData.stockBatches || [])];
+                                next[idx] = {
+                                  ...next[idx],
+                                  stockPacks: Math.max(0, parseInt(e.target.value, 10) || 0),
+                                };
+                                handleUpdateStockBatches(next);
+                              }}
+                              className="w-full px-2 py-1 rounded border border-slate-300 font-mono text-xs font-bold text-emerald-950"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-2">
+                            <label className="block text-[9px] font-bold uppercase text-slate-500 mb-0.5">
+                              Loose Units
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              value={entry.stockLoose || 0}
+                              onChange={(e) => {
+                                const next = [...(formData.stockBatches || [])];
+                                next[idx] = {
+                                  ...next[idx],
+                                  stockLoose: Math.max(0, parseInt(e.target.value, 10) || 0),
+                                };
+                                handleUpdateStockBatches(next);
+                              }}
+                              className="w-full px-2 py-1 rounded border border-slate-300 font-mono text-xs text-slate-800"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-1 flex items-end justify-end pt-3 sm:pt-4">
+                            <button
+                              type="button"
+                              disabled={(formData.stockBatches?.length || 0) <= 1}
+                              onClick={() => {
+                                const next = (formData.stockBatches || []).filter(
+                                  (_, i) => i !== idx
+                                );
+                                handleUpdateStockBatches(next);
+                                soundService.click();
+                              }}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-30 transition cursor-pointer"
+                              title="Remove batch entry"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="sm:col-span-2">

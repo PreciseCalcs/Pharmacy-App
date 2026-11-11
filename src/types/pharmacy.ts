@@ -64,6 +64,16 @@ export interface UserAccount {
   lastLogin?: string;
 }
 
+export interface MedicineStockBatchEntry {
+  id: string;
+  batchNumber?: string;
+  expiryDate?: string; // YYYY-MM-DD
+  stockPacks: number;
+  stockLoose?: number;
+  receivedAt?: string;
+  notes?: string;
+}
+
 export interface MedicineItem {
   id: string;
   name: string;
@@ -84,6 +94,7 @@ export interface MedicineItem {
   minThresholdPacks: number;
   batchNumber: string;
   expiryDate: string;
+  stockBatches?: MedicineStockBatchEntry[]; // Optional per-stock-entry batch number & expiry date tracking (FEFO)
   shelfLocation: string;
   manufacturer: string;
   requiresPrescription: boolean;
@@ -92,6 +103,9 @@ export interface MedicineItem {
   precautions?: string;
   notes?: string;
   imageUrl?: string; // Product photo URL / base64 image data
+  specialDiscountPercent?: number; // Product-specific wholesale / special discount % (e.g., 10 for 10% off)
+  specialDiscountMinPacks?: number; // Minimum packs required for wholesale discount (default 1)
+  specialDiscountLabel?: string; // Tag label shown with product name (e.g., 'Wholesale', 'Trade Offer', 'Special')
   reorderStatus?: 'needed' | 'ordered';
   orderedAt?: string;
   created?: string;
@@ -175,6 +189,8 @@ export interface SaleItem {
   unitsPerPack: number;
   quantity: number;
   pricePerUnit: number;
+  originalPricePerUnit?: number;
+  specialDiscountPercent?: number;
   costPerUnit: number;
   subtotal: number;
   profit: number;

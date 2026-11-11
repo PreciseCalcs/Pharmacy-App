@@ -30,6 +30,7 @@ import {
   Clock,
   ChevronLeft,
   ChevronRight,
+  Tag,
 } from 'lucide-react';
 import {
   MedicineItem,
@@ -40,12 +41,21 @@ import {
 } from '../types/pharmacy';
 import {
   formatPKR,
+  getDaysUntilExpiry,
+  getDiscountedPackPrice,
+  getDiscountedPiecePrice,
+  getEarliestActiveBatch,
   getExpiryBadgeMeta,
+  getMedicineStockBatches,
+  getNearExpiryBatches,
   getPieceRetailPrice,
   getPieceUnitName,
+  getSpecialDiscountPercent,
   getTotalPiecesInStock,
   getUnitsPerPack,
+  hasSpecialDiscount,
   isExpired,
+  isExpiringSoon,
 } from '../utils/pharmacyHelpers';
 import { findSaleByReceiptCode, parseScannedCode } from '../utils/codeParser';
 import { formatDateTime, isToday } from '../utils/dates';
@@ -280,14 +290,23 @@ export const PosView: React.FC<PosViewProps> = ({
   };
 
   const addToCart = useCallback(
-    (med: MedicineItem, unitType: 'pack' | 'loose' = 'pack') => {
+    (
+      med: MedicineItem,
+      unitType: 'pack' | 'loose' = 'pack',
+      forceSpecialDiscount = false
+    ) => {
       setErrorNotice(null);
 
+      // Determine FEFO active stock batch entry
+      const activeBatch = getEarliestActiveBatch(med);
+      const effectiveBatchNumber = activeBatch?.batchNumber || med.batchNumber;
+      const effectiveExpiryDate = activeBatch?.expiryDate || med.expiryDate;
+
       // 1. Block expired medicines immediately
-      if (isExpired(med.expiryDate)) {
+      if (effectiveExpiryDate && isExpired(effectiveExpiryDate)) {
         soundService.errorTone();
         setErrorNotice(
-          `Cannot dispense expired medicine: ${med.name} (Expired: ${med.expiryDate})`
+          `Cannot dispense expired medicine: ${med.name} (Batch ${effectiveBatchNumber} · Expired: ${effectiveExpiryDate})`
         );
         return;
       }
@@ -309,7 +328,7 @@ export const PosView: React.FC<PosViewProps> = ({
           (item) => item.medicineId === med.id && item.unitType === unitType
         );
 
-        const price =
+        const basePrice =
           unitType === 'pack' ? med.unitRetailPrice : getPieceRetailPrice(med);
         const cost =
           unitType === 'pack'
@@ -317,17 +336,45 @@ export const PosView: React.FC<PosViewProps> = ({
             : med.looseCostPrice ||
               Number((med.unitCostPrice / unitsPerPack).toFixed(2));
 
+        const specialPct = getSpecialDiscountPercent(med);
+        const minPacks = Math.max(1, med.specialDiscountMinPacks || 1);
+
         if (existingIndex > -1) {
           const updated = [...prevCart];
           const nextQty = updated[existingIndex].quantity + 1;
+          const shouldApplySpecial =
+            specialPct > 0 &&
+            (forceSpecialDiscount ||
+              Boolean(updated[existingIndex].specialDiscountPercent) ||
+              (unitType === 'pack' && nextQty >= minPacks));
+
+          const effectivePrice = shouldApplySpecial
+            ? unitType === 'pack'
+              ? getDiscountedPackPrice(med)
+              : getDiscountedPiecePrice(med)
+            : basePrice;
+
           updated[existingIndex] = {
             ...updated[existingIndex],
             quantity: nextQty,
-            subtotal: Number((nextQty * price).toFixed(2)),
-            profit: Number(((price - cost) * nextQty).toFixed(2)),
+            pricePerUnit: effectivePrice,
+            originalPricePerUnit: shouldApplySpecial ? basePrice : undefined,
+            specialDiscountPercent: shouldApplySpecial ? specialPct : undefined,
+            subtotal: Number((nextQty * effectivePrice).toFixed(2)),
+            profit: Number(((effectivePrice - cost) * nextQty).toFixed(2)),
           };
           return updated;
         } else {
+          const shouldApplySpecial =
+            specialPct > 0 &&
+            (forceSpecialDiscount || (unitType === 'pack' && 1 >= minPacks));
+
+          const effectivePrice = shouldApplySpecial
+            ? unitType === 'pack'
+              ? getDiscountedPackPrice(med)
+              : getDiscountedPiecePrice(med)
+            : basePrice;
+
           const newItem: SaleItem = {
             medicineId: med.id,
             medicineName: med.name,
@@ -336,12 +383,14 @@ export const PosView: React.FC<PosViewProps> = ({
             unitType,
             unitsPerPack,
             quantity: 1,
-            pricePerUnit: price,
+            pricePerUnit: effectivePrice,
+            originalPricePerUnit: shouldApplySpecial ? basePrice : undefined,
+            specialDiscountPercent: shouldApplySpecial ? specialPct : undefined,
             costPerUnit: cost,
-            subtotal: price,
-            profit: Number((price - cost).toFixed(2)),
-            batchNumber: med.batchNumber,
-            expiryDate: med.expiryDate,
+            subtotal: effectivePrice,
+            profit: Number((effectivePrice - cost).toFixed(2)),
+            batchNumber: effectiveBatchNumber,
+            expiryDate: effectiveExpiryDate,
           };
           return [...prevCart, newItem];
         }
@@ -356,6 +405,28 @@ export const PosView: React.FC<PosViewProps> = ({
     },
     []
   );
+
+  const changeItemBatch = (index: number, batchNumber: string, expiryDate: string) => {
+    if (expiryDate && isExpired(expiryDate)) {
+      soundService.errorTone();
+      setErrorNotice(
+        `Cannot select expired batch ${batchNumber} (Expired: ${expiryDate}).`
+      );
+      return;
+    }
+    setErrorNotice(null);
+    setCart((prev) => {
+      if (!prev[index]) return prev;
+      const next = [...prev];
+      next[index] = {
+        ...next[index],
+        batchNumber,
+        expiryDate,
+      };
+      return next;
+    });
+    soundService.click();
+  };
 
   // Consume external hardware gun or camera barcode scans
   useEffect(() => {
@@ -677,11 +748,59 @@ export const PosView: React.FC<PosViewProps> = ({
     }
 
     const updated = [...cart];
+    let nextPrice = item.pricePerUnit;
+    let nextOrigPrice = item.originalPricePerUnit;
+    let nextSpecialPct = item.specialDiscountPercent;
+
+    if (med && hasSpecialDiscount(med) && item.unitType === 'pack') {
+      const minPacks = Math.max(1, med.specialDiscountMinPacks || 1);
+      const specialPct = getSpecialDiscountPercent(med);
+      if (newQty >= minPacks) {
+        nextPrice = getDiscountedPackPrice(med);
+        nextOrigPrice = med.unitRetailPrice;
+        nextSpecialPct = specialPct;
+      }
+    }
+
     updated[index] = {
       ...item,
       quantity: newQty,
-      subtotal: Number((newQty * item.pricePerUnit).toFixed(2)),
-      profit: Number(((item.pricePerUnit - item.costPerUnit) * newQty).toFixed(2)),
+      pricePerUnit: nextPrice,
+      originalPricePerUnit: nextOrigPrice,
+      specialDiscountPercent: nextSpecialPct,
+      subtotal: Number((newQty * nextPrice).toFixed(2)),
+      profit: Number(((nextPrice - item.costPerUnit) * newQty).toFixed(2)),
+    };
+    setCart(updated);
+    soundService.click();
+  };
+
+  const toggleItemSpecialDiscount = (index: number) => {
+    const item = cart[index];
+    const med = medicines.find((m) => m.id === item.medicineId);
+    if (!med || !hasSpecialDiscount(med)) return;
+
+    const basePrice =
+      item.unitType === 'pack' ? med.unitRetailPrice : getPieceRetailPrice(med);
+    const discountedPrice =
+      item.unitType === 'pack'
+        ? getDiscountedPackPrice(med)
+        : getDiscountedPiecePrice(med);
+    const isCurrentlyDiscounted = Boolean(
+      item.specialDiscountPercent && item.specialDiscountPercent > 0
+    );
+
+    const nextPrice = isCurrentlyDiscounted ? basePrice : discountedPrice;
+    const specialPct = getSpecialDiscountPercent(med);
+
+    const updated = [...cart];
+    updated[index] = {
+      ...item,
+      pricePerUnit: nextPrice,
+      originalPricePerUnit: isCurrentlyDiscounted ? undefined : basePrice,
+      specialDiscountPercent: isCurrentlyDiscounted ? undefined : specialPct,
+      subtotal: Number((item.quantity * nextPrice).toFixed(2)),
+      profit: Number(((nextPrice - item.costPerUnit) * item.quantity).toFixed(2)),
     };
     setCart(updated);
     soundService.click();
@@ -711,8 +830,13 @@ export const PosView: React.FC<PosViewProps> = ({
       return;
     }
 
-    const price =
+    const basePrice =
       nextUnit === 'pack' ? med.unitRetailPrice : getPieceRetailPrice(med);
+    const shouldApplySpecial =
+      nextUnit === 'pack' &&
+      hasSpecialDiscount(med) &&
+      item.quantity >= Math.max(1, med.specialDiscountMinPacks || 1);
+    const price = shouldApplySpecial ? getDiscountedPackPrice(med) : basePrice;
     const cost =
       nextUnit === 'pack'
         ? med.unitCostPrice
@@ -724,6 +848,10 @@ export const PosView: React.FC<PosViewProps> = ({
       ...item,
       unitType: nextUnit,
       pricePerUnit: price,
+      originalPricePerUnit: shouldApplySpecial ? basePrice : undefined,
+      specialDiscountPercent: shouldApplySpecial
+        ? getSpecialDiscountPercent(med)
+        : undefined,
       costPerUnit: cost,
       subtotal: Number((item.quantity * price).toFixed(2)),
       profit: Number(((price - cost) * item.quantity).toFixed(2)),
@@ -1655,12 +1783,40 @@ export const PosView: React.FC<PosViewProps> = ({
 
                           <div className="flex-1 min-w-0">
                             <div className="flex items-start justify-between gap-1">
-                              <h4 className="font-bold text-slate-900 text-xs sm:text-sm group-hover:text-emerald-800 transition truncate">
-                                {med.name}
-                              </h4>
-                              <span className="font-black font-mono tabular-nums text-emerald-800 text-xs sm:text-sm whitespace-nowrap ml-1">
-                                {formatPKR(med.unitRetailPrice)}
-                              </span>
+                              <div className="min-w-0 flex flex-wrap items-center gap-1">
+                                <h4 className="font-bold text-slate-900 text-xs sm:text-sm group-hover:text-emerald-800 transition truncate">
+                                  {med.name}
+                                </h4>
+                                {hasSpecialDiscount(med) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => addToCart(med, 'pack', true)}
+                                    className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-indigo-50 hover:bg-indigo-600 text-indigo-800 hover:text-white border border-indigo-200 text-[9px] font-bold transition cursor-pointer"
+                                    title={`Click to dispense with ${med.specialDiscountLabel || 'Wholesale'} -${med.specialDiscountPercent}% discount (Rs. ${getDiscountedPackPrice(med)})`}
+                                  >
+                                    <Tag className="w-2.5 h-2.5 shrink-0" />
+                                    <span>
+                                      {med.specialDiscountLabel || 'Wholesale'} -{med.specialDiscountPercent}%
+                                    </span>
+                                  </button>
+                                )}
+                              </div>
+                              <div className="text-right shrink-0 ml-1">
+                                <span className="font-black font-mono tabular-nums text-emerald-800 text-xs sm:text-sm whitespace-nowrap block">
+                                  {formatPKR(
+                                    hasSpecialDiscount(med) && (med.specialDiscountMinPacks || 1) <= 1
+                                      ? getDiscountedPackPrice(med)
+                                      : med.unitRetailPrice
+                                  )}
+                                </span>
+                                {hasSpecialDiscount(med) && (
+                                  <span className="text-[9px] font-mono tabular-nums text-indigo-700 font-bold block">
+                                    {(med.specialDiscountMinPacks || 1) <= 1
+                                      ? `MRP Rs. ${med.unitRetailPrice}`
+                                      : `Wholesale Rs. ${Math.round(getDiscountedPackPrice(med))} (≥${med.specialDiscountMinPacks}p)`}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             <div className="text-[11px] text-slate-500 truncate">
                               {med.genericName} &middot; {med.strength}
@@ -1668,7 +1824,7 @@ export const PosView: React.FC<PosViewProps> = ({
                           </div>
                         </div>
 
-                        {/* Unboxed Metadata Line with · Separators */}
+                        {/* Unboxed Metadata Line with · Separators & Batch Expiry Warning */}
                         <div className="flex items-center justify-between text-[10px] text-slate-500 mt-2 pt-1.5 border-t border-slate-100">
                           <div className="flex items-center gap-1 min-w-0 truncate">
                             {med.shelfLocation && (
@@ -1676,18 +1832,32 @@ export const PosView: React.FC<PosViewProps> = ({
                                 {med.shelfLocation} &middot;
                               </span>
                             )}
-                            {med.expiryDate && (
-                              <span
-                                className={`font-mono tabular-nums ${
-                                  expMeta.window !== 'safe'
-                                    ? 'text-amber-700 font-bold'
-                                    : 'text-slate-500'
-                                }`}
-                                title={`Batch ${med.batchNumber} · Expiry: ${med.expiryDate}`}
-                              >
-                                Exp {med.expiryDate}
-                              </span>
-                            )}
+                            {(() => {
+                              const nearBatches = getNearExpiryBatches(med, 90);
+                              const allBatches = getMedicineStockBatches(med);
+                              if (nearBatches.length > 0) {
+                                const earliest = nearBatches[0];
+                                return (
+                                  <span
+                                    className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 border border-amber-300 font-mono tabular-nums font-bold truncate"
+                                    title={`Near-Expiry Warning: Batch ${earliest.batchNumber} expires on ${earliest.expiryDate} (${earliest.shortLabel})`}
+                                  >
+                                    Batch {earliest.batchNumber} &middot; {earliest.shortLabel}
+                                  </span>
+                                );
+                              }
+                              return (
+                                med.expiryDate && (
+                                  <span
+                                    className="font-mono tabular-nums text-slate-500 truncate"
+                                    title={`Batch ${med.batchNumber} · Expiry: ${med.expiryDate}`}
+                                  >
+                                    Batch {med.batchNumber} &middot; Exp {med.expiryDate}
+                                    {allBatches.length > 1 ? ` (${allBatches.length} batches)` : ''}
+                                  </span>
+                                )
+                              );
+                            })()}
                           </div>
                           <span
                             className={`font-mono tabular-nums shrink-0 ${
@@ -1710,7 +1880,13 @@ export const PosView: React.FC<PosViewProps> = ({
                           className="py-1.5 px-2 rounded-lg bg-emerald-50 hover:bg-[#083322] hover:text-white text-emerald-900 font-bold text-[11px] font-mono tabular-nums transition text-center flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap"
                         >
                           <Plus className="w-3 h-3 shrink-0" />
-                          <span>Pack (Rs. {med.unitRetailPrice})</span>
+                          <span>
+                            Pack (Rs.{' '}
+                            {hasSpecialDiscount(med) && (med.specialDiscountMinPacks || 1) <= 1
+                              ? getDiscountedPackPrice(med)
+                              : med.unitRetailPrice}
+                            )
+                          </span>
                         </button>
 
                         <button
@@ -1746,15 +1922,27 @@ export const PosView: React.FC<PosViewProps> = ({
                       }`}
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <span className="font-bold text-slate-900 text-xs sm:text-sm truncate">
                             {med.name}
                           </span>
+                          {hasSpecialDiscount(med) && (
+                            <button
+                              type="button"
+                              onClick={() => addToCart(med, 'pack', true)}
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-indigo-50 hover:bg-indigo-600 text-indigo-800 hover:text-white border border-indigo-200 text-[9px] font-bold transition cursor-pointer"
+                            >
+                              <Tag className="w-2.5 h-2.5" />
+                              <span>
+                                {med.specialDiscountLabel || 'Wholesale'} -{med.specialDiscountPercent}% (Rs. {Math.round(getDiscountedPackPrice(med))})
+                              </span>
+                            </button>
+                          )}
                           <span className="text-[11px] text-slate-500 truncate hidden md:inline">
                             &middot; {med.genericName} ({med.strength})
                           </span>
                         </div>
-                        <div className="text-[10px] text-slate-500 font-mono tabular-nums flex items-center gap-2 mt-0.5">
+                        <div className="text-[10px] text-slate-500 font-mono tabular-nums flex items-center gap-2 mt-0.5 flex-wrap">
                           <span>
                             Stock:{' '}
                             <strong
@@ -1768,7 +1956,18 @@ export const PosView: React.FC<PosViewProps> = ({
                             </strong>
                           </span>
                           {med.shelfLocation && <span>&middot; {med.shelfLocation}</span>}
-                          {med.expiryDate && <span>&middot; Exp {med.expiryDate}</span>}
+                          {med.batchNumber && <span>&middot; Batch {med.batchNumber}</span>}
+                          {med.expiryDate && (
+                            <span
+                              className={
+                                isExpiringSoon(med.expiryDate, 90)
+                                  ? 'text-amber-700 font-bold'
+                                  : ''
+                              }
+                            >
+                              &middot; Exp {med.expiryDate}
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -1908,6 +2107,78 @@ export const PosView: React.FC<PosViewProps> = ({
                 </div>
               )}
 
+              {/* POS Batch Near-Expiry Warning Banner for Cart Items */}
+              {(() => {
+                const cartBatchWarnings = cart
+                  .map((item) => {
+                    const medInCat = medicines.find((m) => m.id === item.medicineId);
+                    const expDate = item.expiryDate || medInCat?.expiryDate || '';
+                    const batchNo = item.batchNumber || medInCat?.batchNumber || 'N/A';
+                    const days = expDate ? getDaysUntilExpiry(expDate) : 999;
+                    if (days <= 90) {
+                      return {
+                        medicineName: item.medicineName,
+                        batchNumber: batchNo,
+                        expiryDate: expDate,
+                        days,
+                        meta: getExpiryBadgeMeta(expDate),
+                      };
+                    }
+                    // Also check if another active stock batch of this medicine is near expiry
+                    if (medInCat) {
+                      const nearBatches = getNearExpiryBatches(medInCat, 90);
+                      if (nearBatches.length > 0) {
+                        const first = nearBatches[0];
+                        return {
+                          medicineName: item.medicineName,
+                          batchNumber: first.batchNumber,
+                          expiryDate: first.expiryDate,
+                          days: first.daysRemaining,
+                          meta: getExpiryBadgeMeta(first.expiryDate),
+                        };
+                      }
+                    }
+                    return null;
+                  })
+                  .filter(Boolean) as Array<{
+                  medicineName: string;
+                  batchNumber: string;
+                  expiryDate: string;
+                  days: number;
+                  meta: ReturnType<typeof getExpiryBadgeMeta>;
+                }>;
+
+                if (cartBatchWarnings.length === 0) return null;
+
+                return (
+                  <div className="mb-2.5 p-2.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-[11px] space-y-1">
+                    <div className="font-extrabold flex items-center gap-1.5 text-amber-900">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                      <span>
+                        Near-Expiry Batch Warning ({cartBatchWarnings.length}{' '}
+                        {cartBatchWarnings.length === 1 ? 'batch' : 'batches'})
+                      </span>
+                    </div>
+                    <div className="space-y-0.5 pl-5">
+                      {cartBatchWarnings.map((w, idx) => (
+                        <div
+                          key={`${w.medicineName}_${w.batchNumber}_${idx}`}
+                          className="flex flex-wrap items-center justify-between gap-1 font-mono text-[10px]"
+                        >
+                          <span className="font-sans font-bold text-slate-900">
+                            {w.medicineName}
+                          </span>
+                          <span>
+                            Batch <strong>{w.batchNumber}</strong> &middot; Exp {w.expiryDate} (
+                            <strong className="text-rose-700">{w.meta.shortLabel}</strong>)
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Cart Items List (Sleek compact empty state so bottom button never clips on 768p laptops) */}
               {cart.length === 0 ? (
                 <div className="py-3 px-3.5 border border-dashed border-slate-200 rounded-xl bg-slate-50/50 flex items-center gap-3">
@@ -1925,6 +2196,19 @@ export const PosView: React.FC<PosViewProps> = ({
                 <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden">
                   {cart.map((item, index) => {
                     const unitLabel = item.unitType === 'pack' ? 'Pack' : 'Loose';
+                    const medInCatalog = medicines.find((m) => m.id === item.medicineId);
+                    const hasMedSpecial = Boolean(
+                      medInCatalog && hasSpecialDiscount(medInCatalog)
+                    );
+                    const isSpecialActive = Boolean(
+                      item.specialDiscountPercent && item.specialDiscountPercent > 0
+                    );
+                    const stockBatches = medInCatalog
+                      ? getMedicineStockBatches(medInCatalog)
+                      : [];
+                    const itemExpMeta = item.expiryDate
+                      ? getExpiryBadgeMeta(item.expiryDate)
+                      : null;
 
                     return (
                       <div
@@ -1932,10 +2216,29 @@ export const PosView: React.FC<PosViewProps> = ({
                         className="px-3 py-2 bg-white hover:bg-slate-50/70 flex items-center justify-between gap-2 transition"
                       >
                         <div className="flex-1 min-w-0">
-                          <div className="font-bold text-slate-900 text-xs truncate">
-                            {item.medicineName}
+                          <div className="font-bold text-slate-900 text-xs flex flex-wrap items-center gap-1">
+                            <span className="truncate">{item.medicineName}</span>
+                            {hasMedSpecial && medInCatalog && (
+                              <button
+                                type="button"
+                                onClick={() => toggleItemSpecialDiscount(index)}
+                                className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[9px] font-bold border transition cursor-pointer ${
+                                  isSpecialActive
+                                    ? 'bg-indigo-600 text-white border-indigo-600'
+                                    : 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
+                                }`}
+                                title="Click to toggle product-specific Wholesale / Special Discount"
+                              >
+                                <Tag className="w-2.5 h-2.5" />
+                                <span>
+                                  {isSpecialActive
+                                    ? `${medInCatalog.specialDiscountLabel || 'Wholesale'} -${item.specialDiscountPercent}%`
+                                    : `+ ${medInCatalog.specialDiscountLabel || 'Wholesale'} -${medInCatalog.specialDiscountPercent}%`}
+                                </span>
+                              </button>
+                            )}
                           </div>
-                          <div className="text-[10px] text-slate-500 font-mono tabular-nums flex items-center gap-1.5 mt-0.5">
+                          <div className="text-[10px] text-slate-500 font-mono tabular-nums flex flex-wrap items-center gap-1.5 mt-0.5">
                             <button
                               type="button"
                               onClick={() => toggleItemUnit(index)}
@@ -1949,6 +2252,46 @@ export const PosView: React.FC<PosViewProps> = ({
                               {unitLabel}
                             </button>
                             <span>&times; Rs. {item.pricePerUnit}</span>
+                            {isSpecialActive && item.originalPricePerUnit && (
+                              <span className="line-through text-slate-400 text-[9px]">
+                                Rs. {item.originalPricePerUnit}
+                              </span>
+                            )}
+                            {stockBatches.length > 1 ? (
+                              <select
+                                value={`${item.batchNumber || ''}|${item.expiryDate || ''}`}
+                                onChange={(e) => {
+                                  const [bNo, bExp] = e.target.value.split('|');
+                                  changeItemBatch(index, bNo, bExp);
+                                }}
+                                className="px-1.5 py-0.2 rounded border border-slate-300 bg-slate-50 text-[9px] font-mono font-bold text-slate-800"
+                                title="Select stock batch to dispense (FEFO)"
+                              >
+                                {stockBatches.map((b) => (
+                                  <option
+                                    key={b.id}
+                                    value={`${b.batchNumber || ''}|${b.expiryDate || ''}`}
+                                  >
+                                    Batch {b.batchNumber || 'N/A'} · Exp {b.expiryDate || 'N/A'} (
+                                    {b.stockPacks}p)
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              item.batchNumber && (
+                                <span className="text-[9px] text-slate-400">
+                                  Batch {item.batchNumber}
+                                </span>
+                              )
+                            )}
+                            {itemExpMeta && itemExpMeta.window !== 'safe' && (
+                              <span
+                                className={`px-1.5 py-0.1 rounded text-[9px] font-bold ${itemExpMeta.badgeClass}`}
+                                title={`Batch ${item.batchNumber} expires on ${item.expiryDate}`}
+                              >
+                                {itemExpMeta.shortLabel}
+                              </span>
+                            )}
                           </div>
                         </div>
 

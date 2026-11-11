@@ -31,6 +31,9 @@ export const INITIAL_ZAHID_MEDICINES: MedicineItem[] = [
     requiresPrescription: false,
     supplier: 'Multan Pharma Distributors',
     notes: 'Fast pain relief & fever reducer',
+    specialDiscountPercent: 10,
+    specialDiscountMinPacks: 1,
+    specialDiscountLabel: 'Wholesale',
   },
   {
     id: 'med_augmentin_625',
@@ -56,6 +59,9 @@ export const INITIAL_ZAHID_MEDICINES: MedicineItem[] = [
     requiresPrescription: true,
     supplier: 'Ali Brothers Multan',
     notes: 'Broad spectrum antibacterial therapy',
+    specialDiscountPercent: 8,
+    specialDiscountMinPacks: 2,
+    specialDiscountLabel: 'Trade Offer',
   },
   {
     id: 'med_risek_20',
@@ -81,6 +87,9 @@ export const INITIAL_ZAHID_MEDICINES: MedicineItem[] = [
     requiresPrescription: false,
     supplier: 'Getz South Punjab',
     notes: 'Acidity, GERD, and stomach ulcer relief',
+    specialDiscountPercent: 10,
+    specialDiscountMinPacks: 1,
+    specialDiscountLabel: 'Wholesale',
   },
   {
     id: 'med_flagyl_400',

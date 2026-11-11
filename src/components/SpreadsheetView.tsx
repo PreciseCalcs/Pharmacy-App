@@ -21,14 +21,18 @@ import {
   ShoppingBag,
   Sparkles,
   Image as ImageIcon,
-  Barcode
+  Barcode,
+  Percent,
+  X
 } from 'lucide-react';
 import { DosageForm, MedicineCategory, MedicineItem } from '../types/pharmacy';
 import {
   formatPKR,
   getDaysUntilExpiry,
+  getDiscountedPackPrice,
   getExpiryBadgeMeta,
   getPieceRetailPrice,
+  hasSpecialDiscount,
   isExpired,
   isExpiringSoon,
 } from '../utils/pharmacyHelpers';
@@ -46,6 +50,7 @@ import { generatePurchaseOrderPDF } from '../services/pdfGenerator';
 
 export type InventoryStockFilter =
   | 'all'
+  | 'wholesale'
   | 'low'
   | 'expiring'
   | 'exp_30'
@@ -88,6 +93,52 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
   const [editingCell, setEditingCell] = useState<{ id: string; field: string } | null>(null);
   const [tempValue, setTempValue] = useState<string>('');
   const [isImporting, setIsImporting] = useState(false);
+
+  // Inline Special / Wholesale Discount Tag Configurator state
+  const [discountConfigMedId, setDiscountConfigMedId] = useState<string | null>(null);
+  const [draftDiscountPct, setDraftDiscountPct] = useState<string>('10');
+  const [draftDiscountMinPacks, setDraftDiscountMinPacks] = useState<number>(1);
+  const [draftDiscountLabel, setDraftDiscountLabel] = useState<string>('Wholesale');
+
+  const wholesaleCount = useMemo(
+    () => medicines.filter((m) => hasSpecialDiscount(m)).length,
+    [medicines]
+  );
+
+  const handleOpenDiscountConfig = (med: MedicineItem) => {
+    if (!canEdit) return;
+    if (discountConfigMedId === med.id) {
+      setDiscountConfigMedId(null);
+      return;
+    }
+    setDiscountConfigMedId(med.id);
+    setDraftDiscountPct(
+      med.specialDiscountPercent && med.specialDiscountPercent > 0
+        ? String(med.specialDiscountPercent)
+        : '10'
+    );
+    setDraftDiscountMinPacks(med.specialDiscountMinPacks || 1);
+    setDraftDiscountLabel(med.specialDiscountLabel || 'Wholesale');
+    soundService.click();
+  };
+
+  const handleSaveSpecialDiscount = async (medId: string, clearDiscount = false) => {
+    const pct = clearDiscount
+      ? 0
+      : Math.max(0, Math.min(90, parseFloat(draftDiscountPct) || 0));
+    try {
+      await onUpdateMedicine(medId, {
+        specialDiscountPercent: pct,
+        specialDiscountMinPacks: pct > 0 ? Math.max(1, draftDiscountMinPacks || 1) : 1,
+        specialDiscountLabel: pct > 0 ? draftDiscountLabel || 'Wholesale' : '',
+      });
+      soundService.click();
+    } catch {
+      soundService.errorTone();
+    } finally {
+      setDiscountConfigMedId(null);
+    }
+  };
 
   React.useEffect(() => {
     if (externalStockFilter) {
@@ -163,8 +214,9 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
       // 3. Dosage Form
       if (selectedDosageForm !== 'All' && m.dosageForm !== selectedDosageForm) return false;
 
-      // 4. Stock & Near-Expiry (30 / 60 / 90 days) alert state
+      // 4. Stock, Wholesale Special Discount & Near-Expiry (30 / 60 / 90 days) alert state
       const daysToExpiry = getDaysUntilExpiry(m.expiryDate);
+      if (stockFilter === 'wholesale' && !hasSpecialDiscount(m)) return false;
       if (stockFilter === 'low' && m.currentStockPacks > m.minThresholdPacks) return false;
       if (stockFilter === 'expiring' && !isExpiringSoon(m.expiryDate, 90)) return false;
       if (stockFilter === 'exp_30' && !(daysToExpiry > 0 && daysToExpiry <= 30)) return false;
@@ -413,10 +465,11 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
           />
         </div>
 
-        {/* Quick Filter Badges (including 30, 60, 90-Day Near Expiry Windows) */}
+        {/* Quick Filter Badges (including Wholesale Offers & 30, 60, 90-Day Near Expiry Windows) */}
         <div className="flex items-center gap-1.5 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 text-xs">
           {[
             { id: 'all', label: 'All Status' },
+            { id: 'wholesale', label: `Wholesale % (${wholesaleCount})` },
             { id: 'low', label: 'Low Stock' },
             { id: 'expiring', label: 'All Near Expiry (≤90d)' },
             { id: 'exp_30', label: '≤ 30 Days' },
@@ -435,7 +488,11 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
                     ? 'bg-amber-600 text-white'
                     : f.id === 'exp_90'
                     ? 'bg-sky-600 text-white'
+                    : f.id === 'wholesale'
+                    ? 'bg-indigo-600 text-white'
                     : 'bg-slate-900 text-white'
+                  : f.id === 'wholesale'
+                  ? 'bg-indigo-50 text-indigo-800 border border-indigo-200 hover:bg-indigo-100'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
@@ -511,17 +568,57 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
                         </button>
                       </td>
 
-                      {/* Name & Formula */}
+                      {/* Name, Formula & Inline Wholesale / Special Discount Tag */}
                       <td className="py-2.5 px-3 font-sans">
-                        <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                        <div className="font-bold text-slate-900 text-xs flex flex-wrap items-center gap-1.5">
                           <span>{m.name}</span>
                           {m.requiresPrescription && (
                             <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-amber-100 text-amber-800">
                               Rx
                             </span>
                           )}
+
+                          {/* Wholesale / Special Product Discount Tag with Product Name */}
+                          {hasSpecialDiscount(m) ? (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenDiscountConfig(m)}
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-[10px] font-bold transition cursor-pointer"
+                              title={
+                                canEdit
+                                  ? `Special ${m.specialDiscountLabel || 'Wholesale'} Discount: -${m.specialDiscountPercent}% (Net Pack Rate: Rs. ${getDiscountedPackPrice(m)}). Click to configure.`
+                                  : `Special ${m.specialDiscountLabel || 'Wholesale'} Discount: -${m.specialDiscountPercent}% (Net Pack Rate: Rs. ${getDiscountedPackPrice(m)})`
+                              }
+                            >
+                              <Tag className="w-2.5 h-2.5 text-indigo-600 shrink-0" />
+                              <span>
+                                {m.specialDiscountLabel || 'Wholesale'} -{m.specialDiscountPercent}%
+                              </span>
+                              <span className="font-mono tabular-nums text-indigo-950 bg-white/80 px-1 rounded text-[9px]">
+                                Rs. {Math.round(getDiscountedPackPrice(m))}
+                              </span>
+                              {(m.specialDiscountMinPacks || 1) > 1 && (
+                                <span className="text-[9px] font-mono text-indigo-600">
+                                  &ge;{m.specialDiscountMinPacks}p
+                                </span>
+                              )}
+                            </button>
+                          ) : (
+                            canEdit && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenDiscountConfig(m)}
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded border border-dashed border-slate-300 hover:border-indigo-400 text-slate-400 hover:text-indigo-700 hover:bg-indigo-50/60 text-[9px] font-semibold opacity-60 group-hover:opacity-100 transition cursor-pointer"
+                                title="Configure Wholesale / Special Discount tag for this product"
+                              >
+                                <Percent className="w-2.5 h-2.5" />
+                                <span>+ Special %</span>
+                              </button>
+                            )
+                          )}
                         </div>
-                        <div className="text-[10px] text-slate-500 font-mono flex items-center gap-2">
+
+                        <div className="text-[10px] text-slate-500 font-mono flex items-center gap-2 mt-0.5">
                           <span>{m.genericName} &bull; {m.strength}</span>
                           <button
                             type="button"
@@ -533,6 +630,152 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
                             <span>{m.barcode || m.sku}</span>
                           </button>
                         </div>
+
+                        {/* Inline Special / Wholesale Discount Configurator Strip */}
+                        {discountConfigMedId === m.id && canEdit && (
+                          <div className="mt-2 p-2.5 rounded-xl bg-indigo-50/80 border border-indigo-200 space-y-2 text-[11px] max-w-md shadow-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-extrabold text-indigo-950 flex items-center gap-1">
+                                <Tag className="w-3.5 h-3.5 text-indigo-600" />
+                                <span>Configure Wholesale / Special Discount</span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setDiscountConfigMedId(null)}
+                                className="text-slate-400 hover:text-slate-700 p-0.5 cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {/* Quick % Presets */}
+                            <div className="flex flex-wrap items-center gap-1">
+                              {[5, 8, 10, 12, 15, 20].map((pct) => (
+                                <button
+                                  key={pct}
+                                  type="button"
+                                  onClick={() => setDraftDiscountPct(String(pct))}
+                                  className={`px-2 py-0.5 rounded-md font-mono font-bold text-[10px] border transition cursor-pointer ${
+                                    Number(draftDiscountPct) === pct
+                                      ? 'bg-indigo-600 text-white border-indigo-600'
+                                      : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300'
+                                  }`}
+                                >
+                                  {pct}%
+                                </button>
+                              ))}
+                              <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-md border border-indigo-300 ml-1">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={90}
+                                  step={0.5}
+                                  value={draftDiscountPct}
+                                  onChange={(e) => setDraftDiscountPct(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      handleSaveSpecialDiscount(m.id, false);
+                                    } else if (e.key === 'Escape') {
+                                      setDiscountConfigMedId(null);
+                                    }
+                                  }}
+                                  className="w-12 font-mono font-bold text-[11px] text-indigo-950 focus:outline-none"
+                                  placeholder="%"
+                                />
+                                <span className="text-[10px] font-bold text-indigo-700">%</span>
+                              </div>
+                            </div>
+
+                            {/* Tag Label & Min Packs */}
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <div>
+                                <label className="block text-[9px] font-bold uppercase text-indigo-900/70 mb-0.5">
+                                  Tag Label
+                                </label>
+                                <select
+                                  value={draftDiscountLabel}
+                                  onChange={(e) => setDraftDiscountLabel(e.target.value)}
+                                  className="w-full px-2 py-1 rounded-lg border border-indigo-200 bg-white text-[11px] font-semibold text-slate-800"
+                                >
+                                  <option value="Wholesale">Wholesale</option>
+                                  <option value="Trade Offer">Trade Offer</option>
+                                  <option value="Bulk Deal">Bulk Deal</option>
+                                  <option value="Clinic Rate">Clinic Rate</option>
+                                  <option value="Special">Special</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-[9px] font-bold uppercase text-indigo-900/70 mb-0.5">
+                                  Min Packs Required
+                                </label>
+                                <select
+                                  value={draftDiscountMinPacks}
+                                  onChange={(e) =>
+                                    setDraftDiscountMinPacks(parseInt(e.target.value, 10) || 1)
+                                  }
+                                  className="w-full px-2 py-1 rounded-lg border border-indigo-200 bg-white text-[11px] font-mono font-semibold text-slate-800"
+                                >
+                                  <option value={1}>1+ Pack (Any Pack)</option>
+                                  <option value={2}>2+ Packs</option>
+                                  <option value={3}>3+ Packs</option>
+                                  <option value={5}>5+ Packs (Bulk)</option>
+                                  <option value={10}>10+ Packs (Carton)</option>
+                                </select>
+                              </div>
+                            </div>
+
+                            {/* Live Wholesale Rate & Margin Check */}
+                            {(() => {
+                              const pct = Math.max(
+                                0,
+                                Math.min(90, parseFloat(draftDiscountPct) || 0)
+                              );
+                              const netPack = Number(
+                                (m.unitRetailPrice * (1 - pct / 100)).toFixed(2)
+                              );
+                              const profitPerPack = Number(
+                                (netPack - m.unitCostPrice).toFixed(2)
+                              );
+                              return (
+                                <div className="flex items-center justify-between gap-2 pt-1 border-t border-indigo-200/70">
+                                  <div className="text-[10px] font-mono tabular-nums">
+                                    <span className="text-slate-600">Net Pack: </span>
+                                    <strong className="text-indigo-950">Rs. {netPack}</strong>
+                                    <span
+                                      className={`ml-1.5 font-bold ${
+                                        profitPerPack < 0
+                                          ? 'text-rose-600'
+                                          : 'text-emerald-700'
+                                      }`}
+                                    >
+                                      ({profitPerPack >= 0 ? `+Rs. ${profitPerPack}` : `Loss Rs. ${profitPerPack}`} vs Cost Rs. {m.unitCostPrice})
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {hasSpecialDiscount(m) && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSaveSpecialDiscount(m.id, true)}
+                                        className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 font-bold text-[10px] cursor-pointer"
+                                      >
+                                        Remove
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveSpecialDiscount(m.id, false)}
+                                      className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <Check className="w-3 h-3" />
+                                      <span>Save Tag</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
                       </td>
 
                       {/* Category */}
@@ -613,9 +856,16 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
                             autoFocus
                           />
                         ) : (
-                          <span className="font-bold text-emerald-800">
-                            Rs. {m.unitRetailPrice}
-                          </span>
+                          <div className="flex flex-col">
+                            <span className="font-bold text-emerald-800">
+                              Rs. {m.unitRetailPrice}
+                            </span>
+                            {hasSpecialDiscount(m) && (
+                              <span className="text-[9px] text-indigo-700 font-bold">
+                                Net: Rs. {getDiscountedPackPrice(m)}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
 

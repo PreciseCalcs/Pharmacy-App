@@ -125,11 +125,34 @@ export class PharmacySyncEngine {
           localStorage.setItem(expiryMigratedKey, 'true');
         }
 
+        // Backfill sample Wholesale / Special Discount tags once for existing local catalogs
+        const wholesaleMigratedKey = 'zahid_wholesale_discount_seed_v1';
+        if (!localStorage.getItem(wholesaleMigratedKey)) {
+          const seedMedMap = new Map(INITIAL_ZAHID_MEDICINES.map((m) => [m.id, m]));
+          this.medicines = this.medicines.map((m) => {
+            const seedMed = seedMedMap.get(m.id);
+            if (
+              seedMed?.specialDiscountPercent &&
+              m.specialDiscountPercent === undefined
+            ) {
+              return {
+                ...m,
+                specialDiscountPercent: seedMed.specialDiscountPercent,
+                specialDiscountMinPacks: seedMed.specialDiscountMinPacks,
+                specialDiscountLabel: seedMed.specialDiscountLabel,
+              };
+            }
+            return m;
+          });
+          localStorage.setItem(wholesaleMigratedKey, 'true');
+        }
+
         localStorage.setItem(INVENTORY_STORAGE_KEY, JSON.stringify(this.medicines));
       } else {
         this.medicines = [...INITIAL_ZAHID_MEDICINES];
         localStorage.setItem(INVENTORY_STORAGE_KEY, JSON.stringify(this.medicines));
         localStorage.setItem('zahid_expiry_30_60_90_v1', 'true');
+        localStorage.setItem('zahid_wholesale_discount_seed_v1', 'true');
       }
 
       // 2. Load Sales
@@ -1331,7 +1354,7 @@ export class PharmacySyncEngine {
       createdAt: new Date().toISOString(),
     };
 
-    // 1. Accurately decrement inventory stock (handles pack-breaking without phantom loose units)
+    // 1. Accurately decrement inventory stock (handles pack-breaking and multi-batch FEFO entries)
     items.forEach((item) => {
       const med = this.medicines.find((m) => m.id === item.medicineId);
       if (!med) return;
@@ -1362,6 +1385,49 @@ export class PharmacySyncEngine {
           med.currentStockLoose = Math.max(0, currentLoose - item.quantity);
         }
       }
+
+      // Also decrement from matching or FEFO batch in med.stockBatches if tracked
+      if (Array.isArray(med.stockBatches) && med.stockBatches.length > 0) {
+        let remainingPiecesToDeduct =
+          item.unitType === 'pack' ? item.quantity * unitsPerPack : item.quantity;
+
+        const targetIdx = med.stockBatches.findIndex(
+          (b) =>
+            b.batchNumber === item.batchNumber &&
+            (b.stockPacks > 0 || (b.stockLoose || 0) > 0)
+        );
+        const orderedIndices = [
+          ...(targetIdx > -1 ? [targetIdx] : []),
+          ...med.stockBatches.map((_, idx) => idx).filter((idx) => idx !== targetIdx),
+        ];
+
+        for (const bIdx of orderedIndices) {
+          if (remainingPiecesToDeduct <= 0) break;
+          const b = med.stockBatches[bIdx];
+          const batchTotalPieces = b.stockPacks * unitsPerPack + (b.stockLoose || 0);
+          if (batchTotalPieces <= 0) continue;
+
+          const deductHere = Math.min(batchTotalPieces, remainingPiecesToDeduct);
+          const afterBatchPieces = batchTotalPieces - deductHere;
+          b.stockPacks = Math.floor(afterBatchPieces / unitsPerPack);
+          b.stockLoose = afterBatchPieces % unitsPerPack;
+          remainingPiecesToDeduct -= deductHere;
+        }
+
+        // Sync primary batchNumber & expiryDate to earliest remaining active batch (FEFO)
+        const activeBatches = [...med.stockBatches]
+          .filter((b) => b.stockPacks > 0 || (b.stockLoose || 0) > 0)
+          .sort((a, b) => {
+            const dA = a.expiryDate ? getDaysUntilExpiry(a.expiryDate) : 9999;
+            const dB = b.expiryDate ? getDaysUntilExpiry(b.expiryDate) : 9999;
+            return dA - dB;
+          });
+        if (activeBatches.length > 0) {
+          if (activeBatches[0].batchNumber) med.batchNumber = activeBatches[0].batchNumber;
+          if (activeBatches[0].expiryDate) med.expiryDate = activeBatches[0].expiryDate;
+        }
+      }
+
       med.updated = new Date().toISOString();
     });
 

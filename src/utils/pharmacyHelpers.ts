@@ -1,4 +1,4 @@
-import { DosageForm, MedicineItem } from '../types/pharmacy';
+import { DosageForm, MedicineItem, MedicineStockBatchEntry } from '../types/pharmacy';
 
 export function getUnitsPerPack(med: MedicineItem): number {
   return med.unitsPerPack > 0 ? med.unitsPerPack : 1;
@@ -52,6 +52,28 @@ export function getPieceCostPrice(med: MedicineItem): number {
 export function getTotalPiecesInStock(med: MedicineItem): number {
   const units = getUnitsPerPack(med);
   return (med.currentStockPacks * units) + (med.currentStockLoose || 0);
+}
+
+export function hasSpecialDiscount(med: MedicineItem): boolean {
+  return Boolean(med.specialDiscountPercent && med.specialDiscountPercent > 0);
+}
+
+export function getSpecialDiscountPercent(med: MedicineItem): number {
+  const pct = Number(med.specialDiscountPercent || 0);
+  return pct > 0 ? Math.min(90, Math.round(pct * 100) / 100) : 0;
+}
+
+export function getDiscountedPackPrice(med: MedicineItem): number {
+  const pct = getSpecialDiscountPercent(med);
+  if (pct <= 0) return med.unitRetailPrice;
+  return Number((med.unitRetailPrice * (1 - pct / 100)).toFixed(2));
+}
+
+export function getDiscountedPiecePrice(med: MedicineItem): number {
+  const basePiece = getPieceRetailPrice(med);
+  const pct = getSpecialDiscountPercent(med);
+  if (pct <= 0) return basePiece;
+  return Number((basePiece * (1 - pct / 100)).toFixed(2));
 }
 
 export function formatPKR(amount: number): string {
@@ -153,4 +175,96 @@ export function getExpiryBadgeMeta(expiryDateStr: string): {
     textClass: 'text-slate-600',
   };
 }
+
+/**
+ * Returns all stock batch entries for a medicine (using med.stockBatches if defined,
+ * or falling back to a single synthesized entry from primary batchNumber & expiryDate).
+ */
+export function getMedicineStockBatches(med: MedicineItem): MedicineStockBatchEntry[] {
+  if (Array.isArray(med.stockBatches) && med.stockBatches.length > 0) {
+    return [...med.stockBatches].sort((a, b) => {
+      const daysA = a.expiryDate ? getDaysUntilExpiry(a.expiryDate) : 9999;
+      const daysB = b.expiryDate ? getDaysUntilExpiry(b.expiryDate) : 9999;
+      return daysA - daysB;
+    });
+  }
+  return [
+    {
+      id: `batch_default_${med.id}`,
+      batchNumber: med.batchNumber || 'B-101',
+      expiryDate: med.expiryDate || '',
+      stockPacks: med.currentStockPacks || 0,
+      stockLoose: med.currentStockLoose || 0,
+    },
+  ];
+}
+
+/**
+ * Returns the FEFO (First-Expired, First-Out) active non-expired batch entry with stock,
+ * or the earliest batch overall if all are out of stock or expired.
+ */
+export function getEarliestActiveBatch(med: MedicineItem): MedicineStockBatchEntry {
+  const batches = getMedicineStockBatches(med);
+  const inStockNonExpired = batches.filter(
+    (b) =>
+      (b.stockPacks > 0 || (b.stockLoose || 0) > 0) &&
+      (!b.expiryDate || !isExpired(b.expiryDate))
+  );
+  if (inStockNonExpired.length > 0) return inStockNonExpired[0];
+
+  const inStockAny = batches.filter((b) => b.stockPacks > 0 || (b.stockLoose || 0) > 0);
+  if (inStockAny.length > 0) return inStockAny[0];
+
+  return batches[0];
+}
+
+export interface BatchExpiryWarning {
+  batchId: string;
+  batchNumber: string;
+  expiryDate: string;
+  stockPacks: number;
+  stockLoose: number;
+  daysRemaining: number;
+  window: 'expired' | '30_days' | '60_days' | '90_days' | 'safe';
+  shortLabel: string;
+  horizonLabel: string;
+  badgeClass: string;
+}
+
+/**
+ * Returns all active stock batches of a medicine that are near expiry (≤ thresholdDays) or expired.
+ */
+export function getNearExpiryBatches(
+  med: MedicineItem,
+  thresholdDays = 90
+): BatchExpiryWarning[] {
+  const batches = getMedicineStockBatches(med);
+  const warnings: BatchExpiryWarning[] = [];
+
+  for (const b of batches) {
+    if (!b.expiryDate) continue;
+    const hasStock = b.stockPacks > 0 || (b.stockLoose || 0) > 0 || batches.length === 1;
+    if (!hasStock) continue;
+
+    const days = getDaysUntilExpiry(b.expiryDate);
+    if (days <= thresholdDays) {
+      const meta = getExpiryBadgeMeta(b.expiryDate);
+      warnings.push({
+        batchId: b.id,
+        batchNumber: b.batchNumber || med.batchNumber || 'Unlabeled',
+        expiryDate: b.expiryDate,
+        stockPacks: b.stockPacks,
+        stockLoose: b.stockLoose || 0,
+        daysRemaining: days,
+        window: meta.window,
+        shortLabel: meta.shortLabel,
+        horizonLabel: meta.horizonLabel,
+        badgeClass: meta.badgeClass,
+      });
+    }
+  }
+
+  return warnings.sort((a, b) => a.daysRemaining - b.daysRemaining);
+}
+
 

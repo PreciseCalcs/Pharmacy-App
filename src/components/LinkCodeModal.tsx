@@ -33,6 +33,247 @@ interface LinkCodeModalProps {
   onQuickListedAndDispense: (medicine: MedicineItem) => void;
 }
 
+interface FuzzyMedicineSuggestion {
+  medicine: MedicineItem;
+  score: number; // 0 - 100
+  matchReason: string;
+}
+
+const PHARMA_STOP_WORDS = new Set([
+  'tablet',
+  'tablets',
+  'tab',
+  'tabs',
+  'capsule',
+  'capsules',
+  'cap',
+  'caps',
+  'syrup',
+  'syp',
+  'suspension',
+  'susp',
+  'drops',
+  'drop',
+  'injection',
+  'inj',
+  'spray',
+  'nasal',
+  'cream',
+  'ointment',
+  'gel',
+  'sachet',
+  'pack',
+  'packof',
+  'oral',
+  'solution',
+  'liquid',
+  'infusion',
+  'inhaler',
+]);
+
+function normalizeProductString(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/([a-z])(\d)/g, '$1 $2')
+    .replace(/(\d)([a-z])/g, '$1 $2')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractCoreTokens(input: string): string[] {
+  const norm = normalizeProductString(input);
+  if (!norm) return [];
+  return norm
+    .split(' ')
+    .filter(
+      (t) =>
+        t.length >= 2 &&
+        !PHARMA_STOP_WORDS.has(t) &&
+        !/^\d+(mg|ml|mcg|g|iu|sp|s)?$/i.test(t)
+    );
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const matrix: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return matrix[a.length][b.length];
+}
+
+function diceCoefficient(a: string, b: string): number {
+  const s1 = a.replace(/\s+/g, '').toLowerCase();
+  const s2 = b.replace(/\s+/g, '').toLowerCase();
+  if (s1 === s2) return 1;
+  if (s1.length < 2 || s2.length < 2) return 0;
+
+  const bigrams1 = new Map<string, number>();
+  for (let i = 0; i < s1.length - 1; i++) {
+    const bg = s1.slice(i, i + 2);
+    bigrams1.set(bg, (bigrams1.get(bg) || 0) + 1);
+  }
+
+  let intersection = 0;
+  for (let i = 0; i < s2.length - 1; i++) {
+    const bg = s2.slice(i, i + 2);
+    const count = bigrams1.get(bg) || 0;
+    if (count > 0) {
+      bigrams1.set(bg, count - 1);
+      intersection++;
+    }
+  }
+
+  return (2 * intersection) / (s1.length - 1 + (s2.length - 1));
+}
+
+function computeFuzzyMedicineMatch(
+  queryName: string,
+  queryStrength: string,
+  queryDosageForm: string | undefined,
+  scannedBarcode: string,
+  med: MedicineItem
+): FuzzyMedicineSuggestion | null {
+  const cleanQuery = queryName.trim();
+  const queryTokens = extractCoreTokens(cleanQuery);
+  const medNameTokens = extractCoreTokens(med.name);
+  const medGenericTokens = extractCoreTokens(med.genericName || '');
+
+  let bestScore = 0;
+  let reason = '';
+
+  if (queryTokens.length > 0 && medNameTokens.length > 0) {
+    const primaryQueryBrand = queryTokens[0];
+    const primaryMedBrand = medNameTokens[0];
+
+    // 1. Exact or Prefix Brand Token Match
+    if (primaryQueryBrand === primaryMedBrand && primaryQueryBrand.length >= 3) {
+      bestScore = 84;
+      reason = 'Exact brand name match';
+    } else if (
+      primaryQueryBrand.length >= 4 &&
+      primaryMedBrand.length >= 4 &&
+      (primaryMedBrand.startsWith(primaryQueryBrand) ||
+        primaryQueryBrand.startsWith(primaryMedBrand))
+    ) {
+      bestScore = 76;
+      reason = 'Brand prefix match';
+    }
+
+    // 2. Levenshtein Similarity on primary brand word (catches typos / OCR / GS1 abbreviations)
+    const brandMaxLen = Math.max(primaryQueryBrand.length, primaryMedBrand.length);
+    if (brandMaxLen >= 4) {
+      const dist = levenshteinDistance(primaryQueryBrand, primaryMedBrand);
+      const brandLevRatio = 1 - dist / brandMaxLen;
+      const levScore = Math.round(brandLevRatio * 88);
+      if (levScore > bestScore && dist <= Math.ceil(brandMaxLen * 0.35)) {
+        bestScore = levScore;
+        reason = dist <= 1 ? 'Near-exact brand spelling match' : 'Fuzzy brand name match';
+      }
+    }
+
+    // 3. Sørensen-Dice bigram similarity across full core name & generic formula
+    const queryJoined = queryTokens.join(' ');
+    const medJoined = medNameTokens.join(' ');
+    const diceName = diceCoefficient(queryJoined, medJoined);
+    const diceScore = Math.round(diceName * 86);
+    if (diceScore > bestScore && diceName >= 0.48) {
+      bestScore = diceScore;
+      reason = 'Similar product name';
+    }
+
+    if (medGenericTokens.length > 0) {
+      const genericJoined = medGenericTokens.join(' ');
+      const diceGen = diceCoefficient(queryJoined, genericJoined);
+      const genScore = Math.round(diceGen * 78);
+      if (genScore > bestScore && diceGen >= 0.52) {
+        bestScore = genScore;
+        reason = 'Matches generic formula';
+      }
+    }
+
+    // 4. Multi-token overlap boost
+    const sharedTokens = queryTokens.filter((qt) =>
+      medNameTokens.some(
+        (mt) =>
+          mt === qt ||
+          (qt.length >= 4 && mt.length >= 4 && levenshteinDistance(qt, mt) <= 1)
+      )
+    );
+    if (sharedTokens.length >= 2) {
+      bestScore = Math.min(96, Math.max(bestScore, 80) + sharedTokens.length * 4);
+      reason = 'Multi-word product match';
+    }
+
+    // 5. Strength & Dosage Form alignment boost
+    if (bestScore >= 52) {
+      const normQueryStrength = queryStrength.replace(/\s+/g, '').toLowerCase();
+      const normMedStrength = (med.strength || '').replace(/\s+/g, '').toLowerCase();
+      if (
+        normQueryStrength &&
+        normMedStrength &&
+        normQueryStrength !== '1pack' &&
+        normQueryStrength !== 'standard' &&
+        (normMedStrength.includes(normQueryStrength) ||
+          normQueryStrength.includes(normMedStrength))
+      ) {
+        bestScore = Math.min(99, bestScore + 10);
+        reason = `${reason} + strength (${med.strength})`;
+      }
+      if (
+        queryDosageForm &&
+        med.dosageForm &&
+        queryDosageForm.toLowerCase() === med.dosageForm.toLowerCase()
+      ) {
+        bestScore = Math.min(99, bestScore + 4);
+      }
+    }
+  }
+
+  // 6. Barcode near-match / manufacturer prefix fallback (when barcode is numeric or close to existing barcode)
+  const cleanScannedCode = scannedBarcode.trim();
+  const cleanMedBarcode = (med.barcode || '').trim();
+  if (cleanScannedCode.length >= 6 && cleanMedBarcode.length >= 6 && cleanScannedCode !== cleanMedBarcode) {
+    const codeDist = levenshteinDistance(cleanScannedCode, cleanMedBarcode);
+    if (codeDist <= 2 && Math.abs(cleanScannedCode.length - cleanMedBarcode.length) <= 1) {
+      const codeScore = codeDist === 1 ? 78 : 66;
+      if (codeScore > bestScore) {
+        bestScore = codeScore;
+        reason = `Similar barcode (${codeDist} digit diff)`;
+      }
+    } else if (
+      bestScore >= 50 &&
+      cleanScannedCode.slice(0, 7) === cleanMedBarcode.slice(0, 7)
+    ) {
+      bestScore = Math.min(98, bestScore + 6);
+      reason = `${reason} + same manufacturer GTIN prefix`;
+    }
+  }
+
+  if (bestScore < 52) return null;
+
+  return {
+    medicine: med,
+    score: Math.min(99, bestScore),
+    matchReason: reason || 'Fuzzy catalog match',
+  };
+}
+
 export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
   isOpen,
   onClose,
@@ -83,6 +324,54 @@ export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
   }, [scannedCode, medicines]);
 
   const effectiveBarcode = parsed?.barcode || scannedCode;
+
+  // Extract a candidate product name from 2D scan, alphanumeric barcode/SKU, or typed input
+  const candidateFuzzyQuery = useMemo(() => {
+    if (searchTerm.trim().length >= 2) return searchTerm.trim();
+    if (quickName.trim().length >= 2) return quickName.trim();
+    if (parsed?.productName && parsed.productName.trim().length >= 2) {
+      return parsed.productName.trim();
+    }
+    // Check if the raw scanned code contains alphabetic brand letters (e.g. SKU / internal label)
+    const alphaChunks = (scannedCode || '')
+      .replace(/[^a-zA-Z\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (alphaChunks.length >= 3) return alphaChunks;
+    return '';
+  }, [searchTerm, quickName, parsed?.productName, scannedCode]);
+
+  // Automatically compute fuzzy matches against existing catalog medicines
+  const fuzzySuggestions = useMemo<FuzzyMedicineSuggestion[]>(() => {
+    if (outOfStockMedicine) return [];
+    const results: FuzzyMedicineSuggestion[] = [];
+    const strengthHint = quickStrength || parsed?.strength || '';
+    const formHint = parsed?.dosageForm || quickDosageForm;
+
+    for (const med of medicines) {
+      const suggestion = computeFuzzyMedicineMatch(
+        candidateFuzzyQuery,
+        strengthHint,
+        formHint,
+        effectiveBarcode,
+        med
+      );
+      if (suggestion) {
+        results.push(suggestion);
+      }
+    }
+
+    return results.sort((a, b) => b.score - a.score).slice(0, 5);
+  }, [
+    outOfStockMedicine,
+    medicines,
+    candidateFuzzyQuery,
+    quickStrength,
+    parsed?.strength,
+    parsed?.dosageForm,
+    quickDosageForm,
+    effectiveBarcode,
+  ]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -139,18 +428,40 @@ export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
     setShortBookUrgent(true);
   }, [isOpen, scannedCode, outOfStockMedicine, parsed, effectiveBarcode]);
 
+  // Auto-select the top fuzzy suggestion for quick linking if none is manually selected yet
+  useEffect(() => {
+    if (!isOpen || outOfStockMedicine) return;
+    if (!selectedMedId && fuzzySuggestions.length > 0) {
+      setSelectedMedId(fuzzySuggestions[0].medicine.id);
+    }
+  }, [isOpen, outOfStockMedicine, fuzzySuggestions, selectedMedId]);
+
   if (!isOpen) return null;
 
-  const filteredMedicines = medicines.filter((m) => {
-    const q = searchTerm.toLowerCase().trim();
-    if (!q) return true;
-    return (
-      m.name.toLowerCase().includes(q) ||
-      m.genericName.toLowerCase().includes(q) ||
-      m.sku.toLowerCase().includes(q) ||
-      m.barcode.toLowerCase().includes(q)
-    );
-  });
+  const fuzzyScoreByMedId = new Map<string, FuzzyMedicineSuggestion>(
+    fuzzySuggestions.map((s) => [s.medicine.id, s])
+  );
+
+  const filteredMedicines = medicines
+    .filter((m) => {
+      const q = searchTerm.toLowerCase().trim();
+      if (!q) return true;
+      if (
+        m.name.toLowerCase().includes(q) ||
+        m.genericName.toLowerCase().includes(q) ||
+        m.sku.toLowerCase().includes(q) ||
+        m.barcode.toLowerCase().includes(q)
+      ) {
+        return true;
+      }
+      return fuzzyScoreByMedId.has(m.id);
+    })
+    .sort((a, b) => {
+      const scoreA = fuzzyScoreByMedId.get(a.id)?.score || 0;
+      const scoreB = fuzzyScoreByMedId.get(b.id)?.score || 0;
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      return a.name.localeCompare(b.name);
+    });
 
   // Handler 1: Quick List New Item & Immediately Dispense in POS
   const handleQuickListSubmit = async (e: React.FormEvent, sendToPos: boolean) => {
@@ -267,13 +578,35 @@ export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
     }
   };
 
-  // Handler 4: Link Barcode to Existing Catalog Medicine
-  const handleLinkExisting = async () => {
-    if (!selectedMedId) return;
+  // Handler 4: Link Barcode (and optionally update decoded batch/expiry/MRP) to an Existing Catalog Medicine
+  const handleLinkAndUpdateMedicine = async (
+    targetMed: MedicineItem,
+    updateScannedDetails: boolean
+  ) => {
     setIsLinking(true);
     setErrorMsg(null);
     try {
-      const updated = await syncEngine.linkBarcode(selectedMedId, effectiveBarcode);
+      const patch: Partial<MedicineItem> = {
+        barcode: effectiveBarcode,
+      };
+
+      if (updateScannedDetails && parsed) {
+        if (parsed.batchNumber) patch.batchNumber = parsed.batchNumber;
+        if (parsed.expiryDate) patch.expiryDate = parsed.expiryDate;
+        if (parsed.unitRetailPrice && parsed.unitRetailPrice > 0) {
+          const units =
+            parsed.unitsPerPack && parsed.unitsPerPack > 0
+              ? parsed.unitsPerPack
+              : targetMed.unitsPerPack || 1;
+          patch.unitRetailPrice = parsed.unitRetailPrice;
+          patch.looseRetailPrice = Number((parsed.unitRetailPrice / units).toFixed(2));
+        }
+        if (parsed.unitsPerPack && parsed.unitsPerPack > 0) {
+          patch.unitsPerPack = parsed.unitsPerPack;
+        }
+      }
+
+      const updated = await syncEngine.updateMedicine(targetMed.id, patch);
       soundService.cashRegister();
       if (getTotalPiecesInStock(updated) > 0) {
         onQuickListedAndDispense(updated);
@@ -283,10 +616,17 @@ export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
       onClose();
     } catch (err: any) {
       soundService.errorTone();
-      setErrorMsg(err?.message || 'Failed to link barcode to medicine.');
+      setErrorMsg(err?.message || 'Failed to link and update medicine.');
     } finally {
       setIsLinking(false);
     }
+  };
+
+  const handleLinkExisting = async () => {
+    if (!selectedMedId) return;
+    const targetMed = medicines.find((m) => m.id === selectedMedId);
+    if (!targetMed) return;
+    await handleLinkAndUpdateMedicine(targetMed, Boolean(parsed?.isGS1DataMatrix));
   };
 
   return (
@@ -419,6 +759,97 @@ export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
             </div>
           )}
 
+          {/* Automatic Fuzzy Match Suggestions Card */}
+          {!outOfStockMedicine && fuzzySuggestions.length > 0 && (
+            <div className="p-3 rounded-xl bg-emerald-50/90 border border-emerald-200 space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  <span className="text-[11px] font-extrabold text-emerald-950">
+                    Possible Catalog Matches Found ({fuzzySuggestions.length})
+                  </span>
+                </div>
+                {candidateFuzzyQuery && (
+                  <span className="text-[10px] font-mono text-emerald-800 bg-white/90 px-2 py-0.5 rounded-md border border-emerald-200">
+                    Matched against: &ldquo;{candidateFuzzyQuery}&rdquo;
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+                {fuzzySuggestions.slice(0, 3).map(({ medicine: sugMed, score, matchReason }) => {
+                  const hasStock = getTotalPiecesInStock(sugMed) > 0;
+                  return (
+                    <div
+                      key={sugMed.id}
+                      className="p-2 rounded-lg bg-white border border-emerald-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-2xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-extrabold text-slate-900 text-xs truncate">
+                            {sugMed.name}
+                          </span>
+                          <span className="text-[10px] font-mono font-semibold text-slate-600">
+                            ({sugMed.strength})
+                          </span>
+                          <span className="px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-900 font-mono font-extrabold text-[10px]">
+                            {score}% Match
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-semibold ${
+                              hasStock
+                                ? 'bg-slate-100 text-slate-700'
+                                : 'bg-rose-100 text-rose-800'
+                            }`}
+                          >
+                            {sugMed.currentStockPacks}p stock
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 flex items-center gap-1.5 flex-wrap mt-0.5">
+                          <span className="text-emerald-700 font-semibold">{matchReason}</span>
+                          <span>&bull;</span>
+                          <span className="font-mono">{formatPKR(sugMed.unitRetailPrice)}</span>
+                          {sugMed.barcode && (
+                            <>
+                              <span>&bull;</span>
+                              <span className="font-mono text-slate-400">
+                                Current Code: {sugMed.barcode}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          disabled={isLinking}
+                          onClick={() => handleLinkAndUpdateMedicine(sugMed, true)}
+                          className="px-2.5 py-1.5 rounded-lg bg-[#083322] hover:bg-[#0c432d] text-white font-bold text-[10px] flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                          title="Attach this scanned barcode and update decoded batch/expiry/MRP on this product"
+                        >
+                          <Link2 className="w-3 h-3 text-emerald-300" />
+                          <span>{hasStock ? 'Link & Dispense' : 'Link & Update'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClose();
+                            onOpenListMedicineModal(scannedCode, sugMed);
+                          }}
+                          className="px-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 font-bold text-[10px] transition cursor-pointer whitespace-nowrap"
+                          title="Open full product editor pre-filled with this medicine and the newly scanned barcode"
+                        >
+                          Edit &amp; Update
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* 3-Option Segmented Switcher */}
           <div className="grid grid-cols-3 gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button
@@ -466,7 +897,10 @@ export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
               }`}
             >
               <Link2 className="w-3.5 h-3.5 shrink-0" />
-              <span>3. Link Existing</span>
+              <span>
+                3. Link Existing
+                {fuzzySuggestions.length > 0 ? ` (${fuzzySuggestions.length})` : ''}
+              </span>
             </button>
           </div>
 
@@ -757,6 +1191,7 @@ export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
                   filteredMedicines.map((m) => {
                     const isSelected = selectedMedId === m.id;
                     const inStock = getTotalPiecesInStock(m) > 0;
+                    const fuzzyMatch = fuzzyScoreByMedId.get(m.id);
                     return (
                       <div
                         key={m.id}
@@ -764,12 +1199,19 @@ export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
                         className={`p-2.5 rounded-lg border cursor-pointer transition flex items-center justify-between ${
                           isSelected
                             ? 'border-emerald-500 bg-emerald-50/70 shadow-xs'
-                            : 'border-slate-200 bg-white hover:bg-slate-50'
+                            : fuzzyMatch
+                              ? 'border-emerald-200 bg-emerald-50/30 hover:bg-emerald-50/50'
+                              : 'border-slate-200 bg-white hover:bg-slate-50'
                         }`}
                       >
                         <div>
-                          <div className="font-bold text-slate-900 flex items-center gap-2">
+                          <div className="font-bold text-slate-900 flex items-center gap-2 flex-wrap">
                             <span>{m.name}</span>
+                            {fuzzyMatch && (
+                              <span className="px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-900 text-[10px] font-mono font-extrabold">
+                                {fuzzyMatch.score}% Match
+                              </span>
+                            )}
                             <span
                               className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
                                 inStock
@@ -782,6 +1224,7 @@ export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
                           </div>
                           <div className="text-[10px] text-slate-500 font-mono">
                             {m.genericName} &bull; {m.strength} &bull; {formatPKR(m.unitRetailPrice)}
+                            {fuzzyMatch ? ` • ${fuzzyMatch.matchReason}` : ''}
                           </div>
                         </div>
                         {isSelected && (
@@ -793,19 +1236,32 @@ export const LinkCodeModal: React.FC<LinkCodeModalProps> = ({
                 )}
               </div>
 
-              <div className="flex gap-2 pt-1">
+              <div className="flex flex-col sm:flex-row gap-2 pt-1">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50 cursor-pointer"
+                  className="py-2.5 px-4 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
+                  disabled={!selectedMedId || isLinking}
+                  onClick={() => {
+                    const targetMed = medicines.find((m) => m.id === selectedMedId);
+                    if (!targetMed) return;
+                    onClose();
+                    onOpenListMedicineModal(scannedCode, targetMed);
+                  }}
+                  className="py-2.5 px-3.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold disabled:opacity-50 cursor-pointer"
+                >
+                  Edit &amp; Update Product
+                </button>
+                <button
+                  type="button"
                   onClick={handleLinkExisting}
                   disabled={!selectedMedId || isLinking}
-                  className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-xs disabled:opacity-50 cursor-pointer"
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-xs disabled:opacity-50 cursor-pointer"
                 >
                   {isLinking ? 'Linking...' : 'Link Barcode & Open in POS'}
                 </button>
