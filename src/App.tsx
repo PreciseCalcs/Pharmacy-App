@@ -41,6 +41,7 @@ import { staffAuth } from './services/staffAuth';
 import { soundService } from './services/soundAlerts';
 import { checkPocketBaseHealth } from './lib/pocketbase';
 import { parseScannedCode } from './utils/codeParser';
+import { getTotalPiecesInStock, isExpired } from './utils/pharmacyHelpers';
 import { can, canOpenTab, defaultTabFor } from './utils/permissions';
 
 // Views & Components
@@ -100,11 +101,16 @@ export default function App() {
   const [initialBarcodeMedicine, setInitialBarcodeMedicine] = useState<MedicineItem | null>(null);
   const [isLinkCodeModalOpen, setIsLinkCodeModalOpen] = useState(false);
   const [unrecognizedCode, setUnrecognizedCode] = useState('');
+  const [outOfStockScannedMed, setOutOfStockScannedMed] = useState<MedicineItem | null>(null);
+  const [pendingScannedCodeForModal, setPendingScannedCodeForModal] = useState<string>('');
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
 
   // Hardware Scanner buffer
   const barcodeBufferRef = useRef<string>('');
   const lastKeyTimeRef = useRef<number>(0);
+  const burstStartTimeRef = useRef<number>(0);
+  const burstKeyCountRef = useRef<number>(0);
+  const scannerAutoFlushTimerRef = useRef<number | null>(null);
   const lastScanTimeRef = useRef<number>(0);
   const [scanToast, setScanToast] = useState<{ message: string; type: 'success' | 'warn' } | null>(null);
   const [externalScannedItem, setExternalScannedItem] = useState<{
@@ -237,13 +243,52 @@ export default function App() {
 
   const handleScannedCode = useCallback(
     (rawCode: string) => {
+      const cleanedRaw = (rawCode || '')
+        .replace(/^[\x00-\x20]+/, '')
+        .replace(/[\x00-\x20]+$/, '');
+      if (!cleanedRaw) {
+        console.warn('[Scanner] handleScannedCode ignored empty rawCode');
+        return;
+      }
+
       const now = Date.now();
-      // 600ms debounce to prevent double-dispensing from camera or rapid gun bounce
-      if (now - lastScanTimeRef.current < 600) return;
+      // 450ms debounce to prevent double-dispensing from camera or rapid gun bounce
+      if (now - lastScanTimeRef.current < 450) {
+        console.log('[Scanner] Debounced duplicate scan within 450ms:', {
+          rawCode: cleanedRaw,
+          elapsedMs: now - lastScanTimeRef.current,
+        });
+        return;
+      }
       lastScanTimeRef.current = now;
 
-      const parsed = parseScannedCode(rawCode, medicines, sales);
+      const parsed = parseScannedCode(cleanedRaw, medicines, sales);
+      console.log('[Scanner] handleScannedCode processed input:', {
+        rawCode: cleanedRaw,
+        parsed,
+        matchedMedicine: parsed.matchedMedicine
+          ? {
+              id: parsed.matchedMedicine.id,
+              name: parsed.matchedMedicine.name,
+              barcode: parsed.matchedMedicine.barcode,
+              stockPieces: getTotalPiecesInStock(parsed.matchedMedicine),
+              expiryDate: parsed.matchedMedicine.expiryDate,
+            }
+          : null,
+        matchedSale: parsed.matchedSale
+          ? {
+              id: parsed.matchedSale.id,
+              invoiceNumber: parsed.matchedSale.invoiceNumber,
+            }
+          : null,
+        isGS1DataMatrix: Boolean(parsed.isGS1DataMatrix),
+      });
+
       if (parsed.matchedSale) {
+        console.log(
+          '[Scanner] Routing to POS for Receipt Return:',
+          parsed.matchedSale.invoiceNumber
+        );
         soundService.scanSuccess();
         showToast(
           `Receipt Scanned: Invoice #${parsed.matchedSale.invoiceNumber} loaded for Return/Refund`,
@@ -255,19 +300,42 @@ export default function App() {
         });
         setActiveTab('pos');
       } else if (parsed.matchedMedicine) {
-        soundService.scanSuccess();
-        showToast(
-          `Added to POS: ${parsed.matchedMedicine.name} (${parsed.matchedMedicine.strength})`,
-          'success'
-        );
-        setExternalScannedItem({
-          medicine: parsed.matchedMedicine,
-          scanId: now,
-        });
-        setActiveTab('pos');
+        const med = parsed.matchedMedicine;
+        if (getTotalPiecesInStock(med) > 0 && !isExpired(med.expiryDate)) {
+          console.log(
+            '[Scanner] In-stock item matched -> Navigating to POS & adding to cart:',
+            med.name
+          );
+          soundService.scanSuccess();
+          showToast(
+            `Added to POS: ${med.name} (${med.strength})`,
+            'success'
+          );
+          setExternalScannedItem({
+            medicine: med,
+            scanId: now,
+          });
+          setActiveTab('pos');
+        } else {
+          // Matched item is out of stock (0 packs) -> show options to Add to Short Book or Restock & Dispense
+          console.log(
+            '[Scanner] Out-of-stock / expired item matched -> Opening LinkCodeModal:',
+            med.name
+          );
+          soundService.scanWarning();
+          setUnrecognizedCode(cleanedRaw);
+          setOutOfStockScannedMed(med);
+          setIsLinkCodeModalOpen(true);
+        }
       } else {
+        // Item is not listed in catalog -> show options to List in Stock, Add to Short Book, or Link
+        console.log(
+          '[Scanner] Unlisted barcode scanned -> Opening LinkCodeModal (List or Add to Short Book):',
+          cleanedRaw
+        );
         soundService.scanWarning();
-        setUnrecognizedCode(parsed.barcode || rawCode);
+        setUnrecognizedCode(cleanedRaw);
+        setOutOfStockScannedMed(null);
         setIsLinkCodeModalOpen(true);
       }
     },
@@ -276,9 +344,95 @@ export default function App() {
 
   // Global Keyboard Shortcuts & Hardware Scanner Listener
   useEffect(() => {
+    const clearScannerBuffer = () => {
+      barcodeBufferRef.current = '';
+      burstKeyCountRef.current = 0;
+      burstStartTimeRef.current = 0;
+      if (scannerAutoFlushTimerRef.current !== null) {
+        window.clearTimeout(scannerAutoFlushTimerRef.current);
+        scannerAutoFlushTimerRef.current = null;
+      }
+    };
+
+    const stripLeakedScannerTextFromInput = (
+      el: HTMLElement | null,
+      scannedText: string
+    ) => {
+      if (
+        !el ||
+        !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)
+      ) {
+        return;
+      }
+      // Do not touch non-text inputs like checkboxes, radios, range, file
+      if (
+        el instanceof HTMLInputElement &&
+        !['text', 'search', 'tel', 'url', 'number', ''].includes(el.type)
+      ) {
+        return;
+      }
+      try {
+        const currentVal = el.value || '';
+        const printableScan = scannedText.replace(/[\x00-\x1f]+/g, '');
+        let nextVal = currentVal;
+        if (printableScan && currentVal.endsWith(printableScan)) {
+          nextVal = currentVal.slice(0, currentVal.length - printableScan.length);
+        } else if (
+          printableScan &&
+          currentVal.trim() === printableScan.trim()
+        ) {
+          nextVal = '';
+        } else {
+          // If the entire input was just populated by the rapid burst
+          nextVal = '';
+        }
+
+        const prototype =
+          el instanceof HTMLTextAreaElement
+            ? window.HTMLTextAreaElement.prototype
+            : window.HTMLInputElement.prototype;
+        const nativeValueSetter = Object.getOwnPropertyDescriptor(
+          prototype,
+          'value'
+        )?.set;
+        if (nativeValueSetter) {
+          nativeValueSetter.call(el, nextVal);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+          el.value = nextVal;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      } catch (err) {
+        console.warn('[Scanner Buffer] Could not strip leaked input text:', err);
+      }
+    };
+
+    const isLikelyBarcodeString = (code: string, avgMsPerKey: number) => {
+      const clean = code.replace(/^[\x00-\x20]+/, '').replace(/[\x00-\x20]+$/, '');
+      if (clean.length < 4) return false;
+      // Known GS1 2D DataMatrix or Receipt or SKU patterns
+      if (
+        /^01\d{14}/.test(clean) ||
+        /^\(01\)\d{14}/.test(clean) ||
+        /^\d{8,14}$/.test(clean) ||
+        /^ZMS-\d+/i.test(clean) ||
+        /^MED-[A-Z0-9-]+$/i.test(clean) ||
+        (clean.startsWith('{') && clean.endsWith('}'))
+      ) {
+        return true;
+      }
+      // Rapid hardware scanner burst (< 85ms average per character across >= 5 chars)
+      return clean.length >= 5 && avgMsPerKey <= 85;
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      const target = e.target as HTMLElement | null;
+      const isInput = Boolean(
+        target &&
+          (target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.isContentEditable)
+      );
 
       const hasCtrlOrCmd = e.ctrlKey || e.metaKey;
 
@@ -419,6 +573,7 @@ export default function App() {
         return;
       }
       if (e.key === 'Escape') {
+        clearScannerBuffer();
         setIsShortcutsModalOpen(false);
         setIsMedicineModalOpen(false);
         setIsScannerModalOpen(false);
@@ -426,38 +581,152 @@ export default function App() {
         setIsLinkCodeModalOpen(false);
         setIsAuthModalOpen(false);
         setIsCounterDropdownOpen(false);
+        return;
       }
 
-      // 4. Hardware Barcode Gun Buffer (Only when NOT typing inside an input/textarea)
-      if (isInput) {
-        barcodeBufferRef.current = '';
+      // 4. Hardware Barcode Gun Buffer (Works across ALL pages, even when search/form inputs are focused)
+      // Do not hijack scans if MedicineModal or LinkCodeModal is actively open, or if the focused input opts into local scanning
+      const isLocalScannerField =
+        target?.getAttribute?.('data-scanner-local') === 'true';
+      if (isMedicineModalOpen || isLinkCodeModalOpen || isLocalScannerField) {
+        clearScannerBuffer();
+        return;
+      }
+
+      // Ignore pure modifier keys so Shift keydowns before uppercase letters ('Flutiaze', 'NS', 'Rs.')
+      // never reset or corrupt lastKeyTimeRef or barcodeBufferRef
+      if (
+        e.key === 'Shift' ||
+        e.key === 'Control' ||
+        e.key === 'Alt' ||
+        e.key === 'Meta' ||
+        e.key === 'CapsLock' ||
+        e.key === 'NumLock' ||
+        e.key === 'ScrollLock' ||
+        e.key === 'Dead'
+      ) {
         return;
       }
 
       const now = Date.now();
-      const timeDiff = now - lastKeyTimeRef.current;
+      const timeDiff = lastKeyTimeRef.current > 0 ? now - lastKeyTimeRef.current : 9999;
       lastKeyTimeRef.current = now;
 
-      if (e.key === 'Enter') {
-        const candidateCode = barcodeBufferRef.current.trim();
-        barcodeBufferRef.current = '';
+      // Support Group Separator (ASCII 29 / FNC1) emitted by 2D GS1 DataMatrix guns
+      if (e.key === 'GroupSeparator' || e.keyCode === 29) {
+        if (timeDiff <= 250 && barcodeBufferRef.current.length > 0) {
+          barcodeBufferRef.current += '\x1d';
+        }
+        return;
+      }
 
-        // Hardware guns fire characters rapidly (<80ms apart) before pressing Enter
-        if (candidateCode.length >= 4 && timeDiff < 120) {
+      if (e.key === 'Enter' || e.key === 'NumpadEnter' || e.key === 'Tab') {
+        if (scannerAutoFlushTimerRef.current !== null) {
+          window.clearTimeout(scannerAutoFlushTimerRef.current);
+          scannerAutoFlushTimerRef.current = null;
+        }
+
+        const candidateCode = barcodeBufferRef.current.trim();
+        const totalKeys = burstKeyCountRef.current;
+        const burstDuration =
+          burstStartTimeRef.current > 0 ? now - burstStartTimeRef.current : 0;
+        const avgMsPerKey =
+          totalKeys > 1 ? burstDuration / (totalKeys - 1) : timeDiff;
+
+        clearScannerBuffer();
+
+        // Check if this Enter/Tab terminates a valid hardware barcode scan
+        const isRapidGunScan =
+          candidateCode.length >= 4 &&
+          timeDiff < 300 &&
+          (!isInput || isLikelyBarcodeString(candidateCode, avgMsPerKey));
+
+        if (isRapidGunScan) {
+          console.log('[Scanner Buffer] Flushing hardware barcode scan on key:', {
+            triggerKey: e.key,
+            candidateCode,
+            charCount: candidateCode.length,
+            burstDurationMs: Math.round(burstDuration),
+            avgMsPerKey: Math.round(avgMsPerKey),
+            wasInputFocused: isInput,
+          });
+          e.preventDefault();
+          e.stopPropagation();
+          if (isInput) {
+            stripLeakedScannerTextFromInput(target, candidateCode);
+          }
           handleScannedCode(candidateCode);
         }
       } else if (e.key.length === 1 && !hasCtrlOrCmd && !e.altKey) {
-        if (timeDiff > 80) {
+        if (timeDiff > 180) {
           barcodeBufferRef.current = e.key;
+          burstStartTimeRef.current = now;
+          burstKeyCountRef.current = 1;
         } else {
           barcodeBufferRef.current += e.key;
+          burstKeyCountRef.current += 1;
+        }
+
+        // Auto-flush fallback for hardware scanners configured WITHOUT an Enter/Tab suffix
+        if (scannerAutoFlushTimerRef.current !== null) {
+          window.clearTimeout(scannerAutoFlushTimerRef.current);
+          scannerAutoFlushTimerRef.current = null;
+        }
+
+        const currentBuffer = barcodeBufferRef.current;
+        const currentCount = burstKeyCountRef.current;
+        const currentDuration =
+          burstStartTimeRef.current > 0 ? now - burstStartTimeRef.current : 0;
+        const currentAvgMs =
+          currentCount > 1 ? currentDuration / (currentCount - 1) : 999;
+
+        if (
+          currentBuffer.length >= 8 &&
+          currentAvgMs <= 55 &&
+          isLikelyBarcodeString(currentBuffer, currentAvgMs)
+        ) {
+          const activeTarget = target;
+          const wasFocusedInput = isInput;
+          scannerAutoFlushTimerRef.current = window.setTimeout(() => {
+            const finalCode = barcodeBufferRef.current.trim();
+            clearScannerBuffer();
+            if (finalCode.length >= 8) {
+              console.log(
+                '[Scanner Buffer] Auto-flushing suffixless hardware scanner burst:',
+                {
+                  finalCode,
+                  charCount: finalCode.length,
+                  avgMsPerKey: Math.round(currentAvgMs),
+                  wasInputFocused: wasFocusedInput,
+                }
+              );
+              if (wasFocusedInput) {
+                stripLeakedScannerTextFromInput(activeTarget, finalCode);
+              }
+              handleScannedCode(finalCode);
+            }
+          }, 180);
         }
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [medicines, handleScannedCode, handleNavigateTab, currentUser.role, showToast]);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      if (scannerAutoFlushTimerRef.current !== null) {
+        window.clearTimeout(scannerAutoFlushTimerRef.current);
+        scannerAutoFlushTimerRef.current = null;
+      }
+    };
+  }, [
+    medicines,
+    handleScannedCode,
+    handleNavigateTab,
+    currentUser.role,
+    showToast,
+    isMedicineModalOpen,
+    isLinkCodeModalOpen,
+  ]);
 
 
   // Switch counter
@@ -1139,8 +1408,10 @@ export default function App() {
               externalScannedReceipt={externalScannedReceipt}
               onExternalReceiptScanConsumed={handleExternalReceiptScanConsumed}
               onUnrecognizedBarcode={(code) => {
+                const parsed = parseScannedCode(code, medicines, sales);
                 soundService.scanWarning();
                 setUnrecognizedCode(code);
+                setOutOfStockScannedMed(parsed.matchedMedicine || null);
                 setIsLinkCodeModalOpen(true);
               }}
             />
@@ -1165,6 +1436,7 @@ export default function App() {
               onDeleteMedicine={syncEngine.deleteMedicine.bind(syncEngine)}
               onOpenMedicineModal={(med) => {
                 setSelectedMedicineForEdit(med || null);
+                setPendingScannedCodeForModal('');
                 setIsMedicineModalOpen(true);
               }}
               onOpenScanner={() => setIsScannerModalOpen(true)}
@@ -1177,6 +1449,7 @@ export default function App() {
                 setActiveTab('barcodes');
                 soundService.click();
               }}
+              onScanBarcode={handleScannedCode}
               canEdit={currentUser.role === 'owner' || currentUser.role === 'pharmacist'}
               externalStockFilter={externalInventoryFilter}
               onExternalFilterConsumed={handleExternalFilterConsumed}
@@ -1293,14 +1566,29 @@ export default function App() {
 
       <MedicineModal
         isOpen={isMedicineModalOpen}
-        onClose={() => setIsMedicineModalOpen(false)}
+        onClose={() => {
+          setIsMedicineModalOpen(false);
+          setPendingScannedCodeForModal('');
+        }}
         medicine={selectedMedicineForEdit}
+        initialScannedCode={pendingScannedCodeForModal}
         onSave={async (data) => {
           if (selectedMedicineForEdit) {
-            await syncEngine.updateMedicine(selectedMedicineForEdit.id, data);
+            const updated = await syncEngine.updateMedicine(selectedMedicineForEdit.id, data);
+            if (pendingScannedCodeForModal && getTotalPiecesInStock(updated) > 0) {
+              setExternalScannedItem({ medicine: updated, scanId: Date.now() });
+              setActiveTab('pos');
+              showToast(`Updated & added to POS: ${updated.name}`, 'success');
+            }
           } else {
-            await syncEngine.addMedicine(data as any);
+            const created = await syncEngine.addMedicine(data as any);
+            if (pendingScannedCodeForModal && getTotalPiecesInStock(created) > 0) {
+              setExternalScannedItem({ medicine: created, scanId: Date.now() });
+              setActiveTab('pos');
+              showToast(`Listed & added to POS: ${created.name}`, 'success');
+            }
           }
+          setPendingScannedCodeForModal('');
         }}
       />
 
@@ -1338,12 +1626,33 @@ export default function App() {
 
       <LinkCodeModal
         isOpen={isLinkCodeModalOpen}
-        onClose={() => setIsLinkCodeModalOpen(false)}
+        onClose={() => {
+          setIsLinkCodeModalOpen(false);
+          setOutOfStockScannedMed(null);
+        }}
         scannedCode={unrecognizedCode}
         medicines={medicines}
+        currentUserName={currentUser.name}
+        activeCounter={activeCounter}
+        outOfStockMedicine={outOfStockScannedMed}
         onLinked={(m) => {
-          showToast(`Linked barcode to ${m.name}!`, 'success');
+          showToast(`Saved ${m.name} in Medicine Stock!`, 'success');
+        }}
+        onOpenListMedicineModal={(rawCode, existingMed) => {
+          setSelectedMedicineForEdit(existingMed || null);
+          setPendingScannedCodeForModal(rawCode);
+          setIsMedicineModalOpen(true);
+        }}
+        onAddedToShortBook={(itemName, packs) => {
+          showToast(`Added "${itemName}" (+${packs} packs) to Counter Short Book!`, 'success');
+        }}
+        onQuickListedAndDispense={(m) => {
+          setExternalScannedItem({
+            medicine: m,
+            scanId: Date.now(),
+          });
           setActiveTab('pos');
+          showToast(`Listed & added to POS Cart: ${m.name} (${m.strength})`, 'success');
         }}
       />
 

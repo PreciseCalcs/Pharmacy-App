@@ -104,7 +104,26 @@ export const PosView: React.FC<PosViewProps> = ({
   const [catalogPage, setCatalogPage] = useState<number>(1);
   const [showAllCatalog, setShowAllCatalog] = useState<boolean>(false);
 
-  const [cart, setCart] = useState<SaleItem[]>([]);
+  const [cart, setCart] = useState<SaleItem[]>(() => {
+    try {
+      const saved = sessionStorage.getItem('zahid_pos_active_cart_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('zahid_pos_active_cart_v1', JSON.stringify(cart));
+    } catch {
+      // ignore storage errors
+    }
+  }, [cart]);
   const [customerName, setCustomerName] = useState('Walk-in Customer');
   const [customerPhone, setCustomerPhone] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
@@ -308,6 +327,12 @@ export const PosView: React.FC<PosViewProps> = ({
   // Consume external hardware gun or camera barcode scans
   useEffect(() => {
     if (externalScannedItem) {
+      console.log('[PosView] Consuming externalScannedItem:', {
+        scanId: externalScannedItem.scanId,
+        medicine: externalScannedItem.medicine.name,
+        barcode: externalScannedItem.medicine.barcode,
+      });
+      setSearchQuery('');
       addToCart(externalScannedItem.medicine, 'pack');
       onExternalScanConsumed?.();
     }
@@ -526,9 +551,20 @@ export const PosView: React.FC<PosViewProps> = ({
       }
 
       if (parsed.matchedMedicine) {
-        addToCart(parsed.matchedMedicine, 'pack');
-        setSearchQuery('');
-        return;
+        if (
+          getTotalPiecesInStock(parsed.matchedMedicine) > 0 &&
+          !isExpired(parsed.matchedMedicine.expiryDate)
+        ) {
+          addToCart(parsed.matchedMedicine, 'pack');
+          setSearchQuery('');
+          return;
+        }
+        // Matched item is out of stock -> show modal to add to Short Book or restock
+        if (onUnrecognizedBarcode) {
+          setSearchQuery('');
+          onUnrecognizedBarcode(raw);
+          return;
+        }
       }
 
       if (availableMedicines.length === 1) {
@@ -538,11 +574,13 @@ export const PosView: React.FC<PosViewProps> = ({
       }
 
       if (
-        (parsed.isGS1DataMatrix || /^\d{6,14}$/.test(raw)) &&
+        (parsed.isGS1DataMatrix ||
+          /^[A-Za-z0-9\-_.()\/]{4,}$/.test(raw) ||
+          availableMedicines.length === 0) &&
         onUnrecognizedBarcode
       ) {
         setSearchQuery('');
-        onUnrecognizedBarcode(parsed.barcode || raw);
+        onUnrecognizedBarcode(raw);
       }
     }
   };
@@ -908,6 +946,7 @@ export const PosView: React.FC<PosViewProps> = ({
                     <input
                       ref={receiptScanInputRef}
                       type="text"
+                      data-scanner-local="true"
                       value={receiptLookupInput}
                       onChange={(e) => setReceiptLookupInput(e.target.value)}
                       onKeyDown={(e) => {

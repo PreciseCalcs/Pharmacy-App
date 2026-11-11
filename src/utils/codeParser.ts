@@ -209,8 +209,12 @@ function parseGS1DataMatrixString(trimmed: string): Omit<
   ParsedCodeResult,
   'raw' | 'matchedMedicine' | 'matchedSale'
 > | null {
-  // Strip optional GS1 symbology prefixes like ]d2 or ]C1
-  const clean = trimmed.replace(/^\][A-Za-z]\d/, '').trim();
+  // Strip optional leading ASCII control characters (e.g. \x1d FNC1) and GS1 symbology prefixes like ]d2 or ]C1
+  const clean = trimmed
+    .replace(/^[\x00-\x1f]+/, '')
+    .replace(/^\][A-Za-z]\d/, '')
+    .replace(/^[\x00-\x1f]+/, '')
+    .trim();
 
   const hasBrackets = /\(01\)\d{14}/.test(clean);
   const startsWithRaw01 = /^01\d{14}/.test(clean);
@@ -327,17 +331,25 @@ export function parseScannedCode(
   medicines: MedicineItem[],
   sales?: SaleTransaction[]
 ): ParsedCodeResult {
-  const trimmed = (rawCode || '').trim();
+  // Strip leading/trailing whitespace and leading/trailing ASCII control chars (except internal \x1d)
+  const trimmed = (rawCode || '')
+    .replace(/^[\x00-\x20]+/, '')
+    .replace(/[\x00-\x20]+$/, '');
 
   // 0. Check if the scanned code matches a Sale Receipt Invoice Barcode first
   if (sales && sales.length > 0) {
     const matchedReceipt = findSaleByReceiptCode(trimmed, sales);
     if (matchedReceipt) {
-      return {
+      const receiptResult: ParsedCodeResult = {
         raw: trimmed,
         barcode: matchedReceipt.invoiceNumber,
         matchedSale: matchedReceipt,
       };
+      console.log('[codeParser] parseScannedCode (Receipt Match):', {
+        rawCode,
+        parsed: receiptResult,
+      });
+      return receiptResult;
     }
   }
 
@@ -349,11 +361,16 @@ export function parseScannedCode(
         const invKey = parsed.invoiceNumber || parsed.invoice || parsed.txnId;
         const matchedSale = findSaleByReceiptCode(String(invKey), sales);
         if (matchedSale) {
-          return {
+          const jsonReceiptResult: ParsedCodeResult = {
             raw: trimmed,
             barcode: matchedSale.invoiceNumber,
             matchedSale,
           };
+          console.log('[codeParser] parseScannedCode (JSON Receipt Match):', {
+            rawCode,
+            parsed: jsonReceiptResult,
+          });
+          return jsonReceiptResult;
         }
       }
 
@@ -364,13 +381,18 @@ export function parseScannedCode(
           (barcode && m.barcode === barcode) ||
           (barcode && m.sku === barcode)
       );
-      return {
+      const jsonMedResult: ParsedCodeResult = {
         raw: trimmed,
         barcode: barcode || trimmed,
         batchNumber: parsed.batchNumber || parsed.batch,
         expiryDate: parsed.expiryDate || parsed.expiry,
         matchedMedicine: matched,
       };
+      console.log('[codeParser] parseScannedCode (JSON Label):', {
+        rawCode,
+        parsed: jsonMedResult,
+      });
+      return jsonMedResult;
     } catch {
       // Not JSON, continue to other formats
     }
@@ -400,11 +422,16 @@ export function parseScannedCode(
       return false;
     });
 
-    return {
+    const fullGs1Result: ParsedCodeResult = {
       raw: trimmed,
       ...gs1Result,
       matchedMedicine: matched,
     };
+    console.log('[codeParser] parseScannedCode (GS1 2D DataMatrix):', {
+      rawCode,
+      parsed: fullGs1Result,
+    });
+    return fullGs1Result;
   }
 
   // 3. Standard 1D barcode or plain text (EAN-13, Code-128, SKU, etc.)
@@ -421,9 +448,14 @@ export function parseScannedCode(
     );
   });
 
-  return {
+  const standardResult: ParsedCodeResult = {
     raw: trimmed,
     barcode: trimmed,
     matchedMedicine: matched,
   };
+  console.log('[codeParser] parseScannedCode (1D / Standard Barcode):', {
+    rawCode,
+    parsed: standardResult,
+  });
+  return standardResult;
 }

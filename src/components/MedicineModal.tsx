@@ -10,6 +10,7 @@ interface MedicineModalProps {
   isOpen: boolean;
   onClose: () => void;
   medicine: MedicineItem | null; // null for new medicine
+  initialScannedCode?: string;
   onSave: (data: Partial<MedicineItem>) => Promise<void>;
 }
 
@@ -63,6 +64,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
   isOpen,
   onClose,
   medicine,
+  initialScannedCode,
   onSave,
 }) => {
   const [formData, setFormData] = useState<Partial<MedicineItem>>({
@@ -107,25 +109,49 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
     } else {
       // Default new medicine template
       const randomCode = `8964${Math.floor(10000000 + Math.random() * 90000000)}`;
+      const parsedScan = initialScannedCode?.trim()
+        ? parseScannedCode(initialScannedCode.trim(), [])
+        : null;
+
+      if (parsedScan && initialScannedCode) {
+        setScanBoxInput(initialScannedCode.trim());
+        setLastParsedBox(parsedScan);
+      }
+
+      const validUnits =
+        parsedScan?.unitsPerPack && parsedScan.unitsPerPack > 0
+          ? parsedScan.unitsPerPack
+          : 20;
+      const retailPrice =
+        parsedScan?.unitRetailPrice && parsedScan.unitRetailPrice > 0
+          ? parsedScan.unitRetailPrice
+          : 260;
+      const costPrice =
+        parsedScan?.unitRetailPrice && parsedScan.unitRetailPrice > 0
+          ? Math.round(parsedScan.unitRetailPrice * 0.85 * 100) / 100
+          : 200;
+
       setFormData({
-        name: '',
-        genericName: '',
-        barcode: randomCode,
+        name: parsedScan?.productName || '',
+        genericName: parsedScan?.productName
+          ? `${parsedScan.productName}${parsedScan.dosageFormLabel ? ` (${parsedScan.dosageFormLabel})` : ''}`
+          : '',
+        barcode: parsedScan?.barcode || randomCode,
         sku: `MED-${Date.now().toString().slice(-6)}`,
-        category: 'Analgesics & Pain',
+        category: parsedScan?.category || 'Analgesics & Pain',
         department: 'pharmacy',
-        dosageForm: 'Tablet',
-        strength: '500mg',
-        unitsPerPack: 20,
-        unitCostPrice: 200,
-        unitRetailPrice: 260,
-        looseCostPrice: 10,
-        looseRetailPrice: 13,
+        dosageForm: parsedScan?.dosageForm || 'Tablet',
+        strength: parsedScan?.strength || '500mg',
+        unitsPerPack: validUnits,
+        unitCostPrice: costPrice,
+        unitRetailPrice: retailPrice,
+        looseCostPrice: Number((costPrice / validUnits).toFixed(2)),
+        looseRetailPrice: Number((retailPrice / validUnits).toFixed(2)),
         currentStockPacks: 10,
         currentStockLoose: 0,
         minThresholdPacks: 5,
-        batchNumber: `B-${Math.floor(1000 + Math.random() * 9000)}`,
-        expiryDate: '2027-12-31',
+        batchNumber: parsedScan?.batchNumber || `B-${Math.floor(1000 + Math.random() * 9000)}`,
+        expiryDate: parsedScan?.expiryDate || '2027-12-31',
         shelfLocation: 'Rack A-01',
         manufacturer: 'GSK Pakistan',
         requiresPrescription: false,
@@ -134,7 +160,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
         imageUrl: '',
       });
     }
-  }, [medicine, isOpen]);
+  }, [medicine, isOpen, initialScannedCode]);
 
   // Handle product photo upload as base64
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -332,6 +358,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
             <div className="flex flex-col sm:flex-row gap-2">
               <input
                 type="text"
+                data-scanner-local="true"
                 value={scanBoxInput}
                 onChange={(e) => setScanBoxInput(e.target.value)}
                 onKeyDown={(e) => {

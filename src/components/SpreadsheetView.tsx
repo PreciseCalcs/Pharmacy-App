@@ -61,6 +61,7 @@ interface SpreadsheetViewProps {
   onOpenScanner: () => void;
   onOpenPrintLabel: (med: MedicineItem) => void;
   onOpenBarcodeStudio?: (med?: MedicineItem) => void;
+  onScanBarcode?: (code: string) => void;
   canEdit: boolean;
   externalStockFilter?: InventoryStockFilter | null;
   onExternalFilterConsumed?: () => void;
@@ -74,6 +75,7 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
   onOpenScanner,
   onOpenPrintLabel,
   onOpenBarcodeStudio,
+  onScanBarcode,
   canEdit,
   externalStockFilter,
   onExternalFilterConsumed,
@@ -388,9 +390,25 @@ export const SpreadsheetView: React.FC<SpreadsheetViewProps> = ({
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Search brand, formula, condoms, general items, barcode, SKU, shelf..."
+            placeholder="Scan barcode to dispense in POS, or search brand, formula, barcode, SKU, shelf..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && searchTerm.trim() && onScanBarcode) {
+                const raw = searchTerm.trim();
+                // Trigger global barcode routing if it looks like a barcode, 2D GS1 code, or has 0/1 exact barcode match
+                if (
+                  /^(\(01\)|01)\d{14}/.test(raw) ||
+                  /^\d{6,14}$/.test(raw) ||
+                  /^ZMS-/i.test(raw) ||
+                  filteredMedicines.length === 0
+                ) {
+                  e.preventDefault();
+                  setSearchTerm('');
+                  onScanBarcode(raw);
+                }
+              }
+            }}
             className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-slate-50/50"
           />
         </div>
