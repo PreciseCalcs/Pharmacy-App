@@ -21,9 +21,18 @@ import {
   DatabaseBackup,
   RotateCcw,
   FileJson,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Palette,
+  Type
 } from 'lucide-react';
-import { PharmacyCounter, PharmacyDetails, UserAccount, UserRole } from '../types/pharmacy';
+import {
+  PharmacyCounter,
+  PharmacyDetails,
+  PharmacyFontId,
+  PharmacyThemeId,
+  UserAccount,
+  UserRole,
+} from '../types/pharmacy';
 import { syncEngine } from '../services/syncEngine';
 import { staffAuth } from '../services/staffAuth';
 import { soundService } from '../services/soundAlerts';
@@ -503,7 +512,45 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     reader.readAsText(file);
   };
 
- // If locked, render Owner PIN challenge
+  const handleSelectTheme = async (themeId: PharmacyThemeId) => {
+    const updated: PharmacyDetails = {
+      ...details,
+      themeColorScheme: themeId,
+    };
+    setDetails(updated);
+    document.documentElement.setAttribute('data-pharmacy-theme', themeId);
+    soundService.click();
+    await syncEngine.updatePharmacyDetails(updated);
+    onSettingsSaved(updated);
+  };
+
+  const handleSelectFont = async (fontId: PharmacyFontId) => {
+    const updated: PharmacyDetails = {
+      ...details,
+      fontFamily: fontId,
+    };
+    setDetails(updated);
+    document.documentElement.setAttribute('data-pharmacy-font', fontId);
+    soundService.click();
+    await syncEngine.updatePharmacyDetails(updated);
+    onSettingsSaved(updated);
+  };
+
+  const handleResetAppearanceDefaults = async () => {
+    const updated: PharmacyDetails = {
+      ...details,
+      themeColorScheme: 'emerald_clinical',
+      fontFamily: 'default_system',
+    };
+    setDetails(updated);
+    document.documentElement.setAttribute('data-pharmacy-theme', 'emerald_clinical');
+    document.documentElement.setAttribute('data-pharmacy-font', 'default_system');
+    soundService.click();
+    await syncEngine.updatePharmacyDetails(updated);
+    onSettingsSaved(updated);
+  };
+
+  // If locked, render Owner PIN challenge
   if (!isOwnerUnlocked) {
     return (
       <div className="max-w-md mx-auto my-8 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm text-center space-y-4">
@@ -673,6 +720,290 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               onChange={(e) => setDetails({ ...details, city: e.target.value })}
               className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs sm:text-sm"
             />
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 1B: Pharmacy Color Themes & Typography Schemes */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+          <div className="flex items-start gap-3.5">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+              <Palette className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-base font-bold text-slate-900">
+                  Pharmacy appearance — color schemes &amp; fonts
+                </h2>
+                <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold uppercase tracking-wider">
+                  Live preview
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Choose a pharmacy-inspired clinical color palette and display typeface. Changes apply immediately across POS, Inventory, and Reports while keeping the original look as default.
+              </p>
+            </div>
+          </div>
+
+          {((details.themeColorScheme && details.themeColorScheme !== 'emerald_clinical') ||
+            (details.fontFamily && details.fontFamily !== 'default_system')) && (
+            <button
+              type="button"
+              onClick={handleResetAppearanceDefaults}
+              className="px-3 py-1.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+              <span>Restore default theme &amp; font</span>
+            </button>
+          )}
+        </div>
+
+        {/* Color Schemes Sub-section */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+              <Palette className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Pharmacy Color Scheme</span>
+            </label>
+            <span className="text-[11px] text-slate-500">
+              Active:{' '}
+              <strong className="text-slate-800">
+                {(details.themeColorScheme || 'emerald_clinical') === 'emerald_clinical'
+                  ? 'Clinical Emerald Green (Default)'
+                  : details.themeColorScheme === 'cobalt_hospital'
+                  ? 'Hospital Cobalt Blue'
+                  : details.themeColorScheme === 'teal_surgical'
+                  ? 'Surgical Teal & Cyan'
+                  : details.themeColorScheme === 'apothecary_indigo'
+                  ? 'Apothecary Slate Indigo'
+                  : details.themeColorScheme === 'herbal_olive'
+                  ? 'Botanical Herbal Olive'
+                  : 'Emergency Crimson Care'}
+              </strong>
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {(
+              [
+                {
+                  id: 'emerald_clinical' as PharmacyThemeId,
+                  name: 'Clinical Emerald Green',
+                  badge: 'Default',
+                  desc: 'Original Zahid Medical Store deep forest & clinical emerald palette',
+                  swatches: ['swatch-emerald-1', 'swatch-emerald-2', 'swatch-emerald-3', 'swatch-emerald-4'],
+                },
+                {
+                  id: 'cobalt_hospital' as PharmacyThemeId,
+                  name: 'Hospital Cobalt Blue',
+                  badge: 'Hospital Ward',
+                  desc: 'High-contrast diagnostic ward navy & sterile medical cobalt',
+                  swatches: ['bg-[#0b1e3b]', 'bg-[#102a52]', 'bg-[#3b82f6]', 'bg-[#dbeafe]'],
+                },
+                {
+                  id: 'teal_surgical' as PharmacyThemeId,
+                  name: 'Surgical Teal & Cyan',
+                  badge: 'Scrubs & Lab',
+                  desc: 'Sterile operating-room scrub teal & cool clinical aqua',
+                  swatches: ['bg-[#07292e]', 'bg-[#0b3940]', 'bg-[#14b8a6]', 'bg-[#ccfbf1]'],
+                },
+                {
+                  id: 'apothecary_indigo' as PharmacyThemeId,
+                  name: 'Apothecary Slate Indigo',
+                  badge: 'Dispensary',
+                  desc: 'Compound dispensary royal indigo & pharmaceutical slate',
+                  swatches: ['bg-[#131b38]', 'bg-[#1c2752]', 'bg-[#6366f1]', 'bg-[#e0e7ff]'],
+                },
+                {
+                  id: 'herbal_olive' as PharmacyThemeId,
+                  name: 'Botanical Herbal Olive',
+                  badge: 'Herbal / Unani',
+                  desc: 'Natural herbal & Unani dispensary deep olive & botanical sage',
+                  swatches: ['bg-[#172a16]', 'bg-[#223b1f]', 'bg-[#84cc16]', 'bg-[#ecfccb]'],
+                },
+                {
+                  id: 'burgundy_care' as PharmacyThemeId,
+                  name: 'Emergency Crimson Care',
+                  badge: 'Urgent Care',
+                  desc: 'Trauma-cross burgundy & high-visibility ruby accent',
+                  swatches: ['bg-[#2d0c16]', 'bg-[#421120]', 'bg-[#f43f5e]', 'bg-[#ffe4e6]'],
+                },
+              ] as const
+            ).map((scheme) => {
+              const isSelected = (details.themeColorScheme || 'emerald_clinical') === scheme.id;
+              return (
+                <button
+                  key={scheme.id}
+                  type="button"
+                  onClick={() => handleSelectTheme(scheme.id)}
+                  className={`text-left p-3.5 rounded-xl border transition flex flex-col justify-between gap-3 cursor-pointer ${
+                    isSelected
+                      ? 'border-emerald-600 bg-emerald-50/50 ring-2 ring-emerald-500/30 shadow-2xs'
+                      : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/70 bg-white'
+                  }`}
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-slate-900">{scheme.name}</span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
+                          scheme.id === 'emerald_clinical'
+                            ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {scheme.badge}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 leading-snug">{scheme.desc}</p>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                    <div className="flex items-center gap-1.5">
+                      {scheme.swatches.map((swatchClass, idx) => (
+                        <span
+                          key={idx}
+                          className={`w-5 h-5 rounded-md border border-black/10 shadow-2xs ${swatchClass}`}
+                        />
+                      ))}
+                    </div>
+                    {isSelected ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        Active
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-semibold text-slate-400">Apply</span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Typography / Fonts Sub-section */}
+        <div className="space-y-3 pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+              <Type className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Application Font / Typography</span>
+            </label>
+            <span className="text-[11px] text-slate-500">
+              Active:{' '}
+              <strong className="text-slate-800">
+                {(details.fontFamily || 'default_system') === 'default_system'
+                  ? 'Clinical System UI (Default)'
+                  : details.fontFamily === 'plus_jakarta'
+                  ? 'Plus Jakarta Sans'
+                  : details.fontFamily === 'ibm_plex'
+                  ? 'IBM Plex Sans'
+                  : details.fontFamily === 'dm_sans'
+                  ? 'DM Sans'
+                  : details.fontFamily === 'outfit'
+                  ? 'Outfit'
+                  : 'Source Sans 3'}
+              </strong>
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {(
+              [
+                {
+                  id: 'default_system' as PharmacyFontId,
+                  name: 'Clinical System UI',
+                  badge: 'Default',
+                  desc: 'Original native clinical sans-serif with zero latency',
+                  previewClass: 'font-preview-default_system',
+                },
+                {
+                  id: 'plus_jakarta' as PharmacyFontId,
+                  name: 'Plus Jakarta Sans',
+                  badge: 'Modern POS',
+                  desc: 'Sharp geometric medical dashboard & high-legibility counters',
+                  previewClass: 'font-preview-plus_jakarta',
+                },
+                {
+                  id: 'ibm_plex' as PharmacyFontId,
+                  name: 'IBM Plex Sans',
+                  badge: 'Lab & Technical',
+                  desc: 'Precision pharmaceutical label & dosage table clarity',
+                  previewClass: 'font-preview-ibm_plex',
+                },
+                {
+                  id: 'dm_sans' as PharmacyFontId,
+                  name: 'DM Sans',
+                  badge: 'Clean Retail',
+                  desc: 'Balanced low-contrast dispensary & friendly billing typography',
+                  previewClass: 'font-preview-dm_sans',
+                },
+                {
+                  id: 'outfit' as PharmacyFontId,
+                  name: 'Outfit',
+                  badge: 'Bold Display',
+                  desc: 'Contemporary geometric headers for fast shelf & counter scanning',
+                  previewClass: 'font-preview-outfit',
+                },
+                {
+                  id: 'source_sans' as PharmacyFontId,
+                  name: 'Source Sans 3',
+                  badge: 'Formulary',
+                  desc: 'Humanist clinical formulary & dense inventory spreadsheet legibility',
+                  previewClass: 'font-preview-source_sans',
+                },
+              ] as const
+            ).map((fontItem) => {
+              const isSelected = (details.fontFamily || 'default_system') === fontItem.id;
+              return (
+                <button
+                  key={fontItem.id}
+                  type="button"
+                  onClick={() => handleSelectFont(fontItem.id)}
+                  className={`text-left p-3.5 rounded-xl border transition flex flex-col justify-between gap-2.5 cursor-pointer ${
+                    fontItem.previewClass
+                  } ${
+                    isSelected
+                      ? 'border-emerald-600 bg-emerald-50/50 ring-2 ring-emerald-500/30 shadow-2xs'
+                      : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/70 bg-white'
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-slate-900">{fontItem.name}</span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
+                          fontItem.id === 'default_system'
+                            ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {fontItem.badge}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 leading-snug">{fontItem.desc}</p>
+                  </div>
+
+                  <div className="p-2 rounded-lg bg-slate-50 border border-slate-200/80 text-[11px] text-slate-800 flex items-center justify-between">
+                    <span className="font-semibold truncate">Panadol 500mg · Batch B-409</span>
+                    <span className="font-bold text-emerald-800 shrink-0 ml-2">Rs. 260.00</span>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[10px] text-slate-400">Aa Bb Cc · 0123456789</span>
+                    {isSelected ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        Active
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-semibold text-slate-400">Apply</span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>

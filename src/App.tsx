@@ -205,6 +205,14 @@ export default function App() {
     [currentUser.role, showToast]
   );
 
+  // Apply Pharmacy Color Theme & Font Scheme to root HTML element (defaults preserved)
+  useEffect(() => {
+    const activeTheme = pharmacyDetails.themeColorScheme || 'emerald_clinical';
+    const activeFont = pharmacyDetails.fontFamily || 'default_system';
+    document.documentElement.setAttribute('data-pharmacy-theme', activeTheme);
+    document.documentElement.setAttribute('data-pharmacy-font', activeFont);
+  }, [pharmacyDetails.themeColorScheme, pharmacyDetails.fontFamily]);
+
   // SyncEngine Subscription & 1-Second Reconnect/Sync Countdown Ticker
   useEffect(() => {
     refreshHealth(false);

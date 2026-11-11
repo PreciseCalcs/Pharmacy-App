@@ -245,6 +245,22 @@ export interface StockAlert {
   threshold: number;
 }
 
+export type PharmacyThemeId =
+  | 'emerald_clinical'
+  | 'cobalt_hospital'
+  | 'teal_surgical'
+  | 'apothecary_indigo'
+  | 'herbal_olive'
+  | 'burgundy_care';
+
+export type PharmacyFontId =
+  | 'default_system'
+  | 'plus_jakarta'
+  | 'ibm_plex'
+  | 'dm_sans'
+  | 'outfit'
+  | 'source_sans';
+
 export interface PharmacyDetails {
   name: string;
   address: string;
@@ -263,6 +279,8 @@ export interface PharmacyDetails {
   urduRefundPolicy?: string;
   marketingFooter?: string;
   pocketBaseUrl?: string;
+  themeColorScheme?: PharmacyThemeId;
+  fontFamily?: PharmacyFontId;
 }
 
 export interface PharmacyCounter {
@@ -324,6 +342,8 @@ export const DEFAULT_PHARMACY_DETAILS: PharmacyDetails = {
   marketingFooter:
     'For POS & Inventory Software, Contact: 0321-6336959 | 0306-7617080',
   pocketBaseUrl: 'http://127.0.0.1:8090',
+  themeColorScheme: 'emerald_clinical',
+  fontFamily: 'default_system',
 };
 
 export const ZAHID_PHARMACY_DETAILS: PharmacyDetails = DEFAULT_PHARMACY_DETAILS;
